@@ -3,60 +3,53 @@ import pdfplumber
 import pandas as pd
 import io
 import re
-import sqlite3
 import json
+from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Assembly Extractor", layout="wide")
 
-# --- Database Setup & Helper Functions ---
-DB_FILE = "amazon_modules.db"
+# --- Google Sheets Database Logic ---
+def load_all_modules_from_gsheets():
+    """Load all modules from Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        # ttl=0 ensures we always pull the freshest data, not a cached version
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        loaded_modules = {}
+        if not df.empty and "Module_Name" in df.columns and "BOM_JSON" in df.columns:
+            for _, row in df.iterrows():
+                name = row["Module_Name"]
+                bom_json_str = row["BOM_JSON"]
+                if pd.notna(bom_json_str):
+                    bom_df = pd.read_json(io.StringIO(bom_json_str), orient="records")
+                    loaded_modules[name] = {"bom": bom_df}
+        return loaded_modules
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets. Check your secrets! Error: {e}")
+        return {}
 
-def init_db():
-    """Create the database and tables if they don't exist."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS modules (
-            module_name TEXT PRIMARY KEY,
-            bom_json TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def save_module_to_db(module_name, df):
-    """Save or update a module's DataFrame in the database."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    # Convert DataFrame to JSON string so it easily fits in a text column
-    bom_json = df.to_json(orient="records")
-    # REPLACE INTO acts as both an INSERT (if new) and an UPDATE (if exists)
-    cursor.execute('''
-        REPLACE INTO modules (module_name, bom_json)
-        VALUES (?, ?)
-    ''', (module_name, bom_json))
-    conn.commit()
-    conn.close()
-
-def load_all_modules_from_db():
-    """Load all modules from the database into a dictionary."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT module_name, bom_json FROM modules')
-    rows = cursor.fetchall()
-    conn.close()
+def save_module_to_gsheets(module_name, bom_df):
+    """Save or update a module's DataFrame in Google Sheets."""
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
     
-    loaded_modules = {}
-    for row in rows:
-        name = row[0]
-        # Convert JSON string back to DataFrame
-        df = pd.read_json(io.StringIO(row[1]), orient="records")
-        loaded_modules[name] = {"bom": df}
-    return loaded_modules
-
-# Initialize the database file when the app starts
-init_db()
+    bom_json = bom_df.to_json(orient="records")
+    new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json}])
+    
+    if not df.empty and "Module_Name" in df.columns:
+        # Remove the old row for this module, if it exists
+        df = df[df["Module_Name"] != module_name]
+        # Append the updated row
+        df = pd.concat([df, new_row], ignore_index=True)
+    else:
+        df = new_row
+        
+    # Push the entire updated dataframe back to the sheet
+    conn.update(worksheet="Sheet1", data=df)
+    # Clear streamlit's internal cache so the next read is instant
+    st.cache_data.clear()
 
 # --- Authentication Logic ---
 def check_password():
@@ -117,10 +110,9 @@ def process_pdf(pdf_bytes):
 # MAIN APP LOGIC (Protected by Password)
 # ==========================================
 if check_password():
-    # --- Initialize ALL session state variables here ---
+    # --- Initialize session state from Google Sheets ---
     if 'modules_db' not in st.session_state:
-        # Instead of an empty dict, load from our SQLite database!
-        st.session_state.modules_db = load_all_modules_from_db()
+        st.session_state.modules_db = load_all_modules_from_gsheets()
     if 'selected_module' not in st.session_state:
         st.session_state.selected_module = None
 
@@ -154,10 +146,10 @@ if check_password():
                         bom_df = process_pdf(pdf_bytes)
                         
                         if not bom_df.empty:
-                            # Update memory
+                            # Update local memory
                             st.session_state.modules_db[module_name] = {"bom": bom_df}
-                            # NEW: Also save to physical database
-                            save_module_to_db(module_name, bom_df)
+                            # Push to Google Sheets
+                            save_module_to_gsheets(module_name, bom_df)
                             
                             st.success(f"Successfully processed and saved '{module_name}'!")
                             success_count += 1
@@ -217,10 +209,11 @@ if check_password():
                 submit_progress = st.form_submit_button("💾 Save Progress")
                 
             if submit_progress:
-                # Update memory
-                st.session_state.modules_db[module_name]["bom"] = edited_df
-                # NEW: Save changes to the physical database file
-                save_module_to_db(module_name, edited_df)
+                with st.spinner("Saving to Google Sheets..."):
+                    # Update local memory
+                    st.session_state.modules_db[module_name]["bom"] = edited_df
+                    # Update Google Sheets
+                    save_module_to_gsheets(module_name, edited_df)
                 st.rerun()
 
         # --- MASTER VIEW (GRID) ---
