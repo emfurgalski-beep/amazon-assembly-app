@@ -67,15 +67,24 @@ def process_pdf(pdf_bytes):
 # MAIN APP LOGIC (Protected by Password)
 # ==========================================
 if check_password():
+    # --- Initialize ALL session state variables here ---
     if 'modules_db' not in st.session_state:
         st.session_state.modules_db = {}
+    if 'selected_module' not in st.session_state:
+        st.session_state.selected_module = None
 
+    # --- Sidebar Navigation ---
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to", ["Upload New Module", "Dashboard"])
     if st.sidebar.button("Log Out"):
         st.session_state["password_correct"] = False
+        # Reset module selection on logout
+        st.session_state.selected_module = None
         st.rerun()
 
+    # ==========================================
+    # PAGE 1: UPLOAD NEW MODULE
+    # ==========================================
     if page == "Upload New Module":
         st.title("📤 Upload Amazon Assembly Module")
         st.write("Upload a PDF to extract its Bill of Materials and save it to your dashboard.")
@@ -95,53 +104,88 @@ if check_password():
                     else:
                         st.error("Could not find a valid BOM in this document.")
 
+    # ==========================================
+    # PAGE 2: DASHBOARD (with Master-Detail View)
+    # ==========================================
     elif page == "Dashboard":
-        st.title("📊 Module Dashboard")
-        if not st.session_state.modules_db:
-            st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
-        else:
-            st.write("Overview of all extracted modules. Click 'Open Checklist' to view and update progress.")
+        # --- DETAIL VIEW (FULL WINDOW) ---
+        if st.session_state.selected_module:
+            module_name = st.session_state.selected_module
+            module_data = st.session_state.modules_db[module_name]
+            df = module_data["bom"]
+
+            # --- Back Button ---
+            if st.button("← Back to Dashboard"):
+                st.session_state.selected_module = None
+                st.rerun()
+
+            st.title(f"📦 Module: {module_name}")
             st.divider()
-            module_items = list(st.session_state.modules_db.items())
-            for i in range(0, len(module_items), 3):
-                cols = st.columns(3)
-                for j in range(3):
-                    if i + j < len(module_items):
-                        module_name, module_data = module_items[i + j]
-                        df = module_data["bom"]
-                        total_items = len(df)
-                        completed_items = df["Completed"].sum()
-                        progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
 
-                        with cols[j]:
-                            with st.container(border=True):
-                                st.subheader(f"📦 {module_name}")
-                                st.progress(progress_percentage / 100.0)
-                                st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
+            # --- Progress Calculation & Display ---
+            total_items = len(df)
+            completed_items = df["Completed"].sum()
+            progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
+            
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(progress_percentage / 100.0)
+            with col2:
+                st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
+            
+            if progress_percentage == 100:
+                st.success("Module Complete! 🎉")
+                if st.button("Celebrate!", key=f"celebrate_{module_name}"):
+                    st.balloons()
+            
+            st.subheader("📝 Bill of Materials Checklist")
+            
+            # --- Checklist Form ---
+            with st.form(key=f"form_{module_name}"):
+                edited_df = st.data_editor(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Completed": st.column_config.CheckboxColumn("Done?", default=False),
+                        "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
+                        "UIN": st.column_config.TextColumn("UIN", disabled=True),
+                        "Quantity": st.column_config.TextColumn("Qty", disabled=True),
+                        "Description": st.column_config.TextColumn("Description", disabled=True)
+                    }
+                )
+                submit_progress = st.form_submit_button("💾 Save Progress")
+                
+            if submit_progress:
+                st.session_state.modules_db[module_name]["bom"] = edited_df
+                st.rerun()
 
-                                if progress_percentage == 100:
-                                    st.success("Module Complete! 🎉")
-                                    if st.button("Celebrate!", key=f"celebrate_{module_name}"):
-                                        st.balloons()
+        # --- MASTER VIEW (GRID) ---
+        else:
+            st.title("📊 Module Dashboard")
+            if not st.session_state.modules_db:
+                st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
+            else:
+                st.write("Select a module to view its checklist.")
+                st.divider()
+                module_items = list(st.session_state.modules_db.items())
+                for i in range(0, len(module_items), 3):
+                    cols = st.columns(3)
+                    for j in range(3):
+                        if i + j < len(module_items):
+                            module_name, module_data = module_items[i + j]
+                            df = module_data["bom"]
+                            total_items = len(df)
+                            completed_items = df["Completed"].sum()
+                            progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
 
-                                with st.expander("Open Checklist"):
-                                    # --- NEW: Wrap the data editor in a form to allow batch checking ---
-                                    with st.form(key=f"form_{module_name}"):
-                                        edited_df = st.data_editor(
-                                            df,
-                                            hide_index=True,
-                                            use_container_width=True,
-                                            column_config={
-                                                "Completed": st.column_config.CheckboxColumn("Done?", default=False),
-                                                "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
-                                                "UIN": st.column_config.TextColumn("UIN", disabled=True),
-                                                "Quantity": st.column_config.TextColumn("Qty", disabled=True),
-                                                "Description": st.column_config.TextColumn("Description", disabled=True)
-                                            }
-                                        )
-                                        # The submit button executes the save
-                                        submit_progress = st.form_submit_button("💾 Save Progress")
-                                        
-                                    if submit_progress:
-                                        st.session_state.modules_db[module_name]["bom"] = edited_df
-                                        st.rerun() # Instantly refreshes the app to update the progress bar
+                            with cols[j]:
+                                with st.container(border=True):
+                                    st.subheader(f"📦 {module_name}")
+                                    st.progress(progress_percentage / 100.0)
+                                    st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
+                                    
+                                    # --- View Module Button ---
+                                    if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
+                                        st.session_state.selected_module = module_name
+                                        st.rerun()
