@@ -3,13 +3,63 @@ import pdfplumber
 import pandas as pd
 import io
 import re
+import sqlite3
+import json
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Assembly Extractor", layout="wide")
 
+# --- Database Setup & Helper Functions ---
+DB_FILE = "amazon_modules.db"
+
+def init_db():
+    """Create the database and tables if they don't exist."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS modules (
+            module_name TEXT PRIMARY KEY,
+            bom_json TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_module_to_db(module_name, df):
+    """Save or update a module's DataFrame in the database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Convert DataFrame to JSON string so it easily fits in a text column
+    bom_json = df.to_json(orient="records")
+    # REPLACE INTO acts as both an INSERT (if new) and an UPDATE (if exists)
+    cursor.execute('''
+        REPLACE INTO modules (module_name, bom_json)
+        VALUES (?, ?)
+    ''', (module_name, bom_json))
+    conn.commit()
+    conn.close()
+
+def load_all_modules_from_db():
+    """Load all modules from the database into a dictionary."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT module_name, bom_json FROM modules')
+    rows = cursor.fetchall()
+    conn.close()
+    
+    loaded_modules = {}
+    for row in rows:
+        name = row[0]
+        # Convert JSON string back to DataFrame
+        df = pd.read_json(io.StringIO(row[1]), orient="records")
+        loaded_modules[name] = {"bom": df}
+    return loaded_modules
+
+# Initialize the database file when the app starts
+init_db()
+
 # --- Authentication Logic ---
 def check_password():
-    """Returns `True` if the user entered the correct password."""
     def password_entered():
         if st.session_state["password"] == st.secrets["app_password"]:
             st.session_state["password_correct"] = True
@@ -69,7 +119,8 @@ def process_pdf(pdf_bytes):
 if check_password():
     # --- Initialize ALL session state variables here ---
     if 'modules_db' not in st.session_state:
-        st.session_state.modules_db = {}
+        # Instead of an empty dict, load from our SQLite database!
+        st.session_state.modules_db = load_all_modules_from_db()
     if 'selected_module' not in st.session_state:
         st.session_state.selected_module = None
 
@@ -88,13 +139,10 @@ if check_password():
         st.title("📤 Upload Amazon Assembly Module")
         st.write("Upload one or more PDFs to extract their Bill of Materials and save them to your dashboard.")
         
-        # --- NEW: accept_multiple_files is set to True ---
         uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
         
-        # If the list is not empty, loop through the files
         if uploaded_files:
-            success_count = 0 # Track successes to trigger balloons once
-            
+            success_count = 0
             for uploaded_file in uploaded_files:
                 module_name = uploaded_file.name.replace('.pdf', '')
                 
@@ -106,13 +154,16 @@ if check_password():
                         bom_df = process_pdf(pdf_bytes)
                         
                         if not bom_df.empty:
+                            # Update memory
                             st.session_state.modules_db[module_name] = {"bom": bom_df}
+                            # NEW: Also save to physical database
+                            save_module_to_db(module_name, bom_df)
+                            
                             st.success(f"Successfully processed and saved '{module_name}'!")
                             success_count += 1
                         else:
                             st.error(f"Could not find a valid BOM in '{module_name}'.")
             
-            # Fire balloons only if at least one upload worked
             if success_count > 0:
                 st.balloons()
 
@@ -126,7 +177,6 @@ if check_password():
             module_data = st.session_state.modules_db[module_name]
             df = module_data["bom"]
 
-            # --- Back Button ---
             if st.button("← Back to Dashboard"):
                 st.session_state.selected_module = None
                 st.rerun()
@@ -134,7 +184,6 @@ if check_password():
             st.title(f"📦 Module: {module_name}")
             st.divider()
 
-            # --- Progress Calculation & Display ---
             total_items = len(df)
             completed_items = df["Completed"].sum()
             progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
@@ -152,7 +201,6 @@ if check_password():
             
             st.subheader("📝 Bill of Materials Checklist")
             
-            # --- Checklist Form ---
             with st.form(key=f"form_{module_name}"):
                 edited_df = st.data_editor(
                     df,
@@ -169,7 +217,10 @@ if check_password():
                 submit_progress = st.form_submit_button("💾 Save Progress")
                 
             if submit_progress:
+                # Update memory
                 st.session_state.modules_db[module_name]["bom"] = edited_df
+                # NEW: Save changes to the physical database file
+                save_module_to_db(module_name, edited_df)
                 st.rerun()
 
         # --- MASTER VIEW (GRID) ---
@@ -197,7 +248,6 @@ if check_password():
                                     st.progress(progress_percentage / 100.0)
                                     st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
                                     
-                                    # --- View Module Button ---
                                     if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
                                         st.session_state.selected_module = module_name
                                         st.rerun()
