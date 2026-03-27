@@ -9,12 +9,14 @@ from streamlit_gsheets import GSheetsConnection
 # --- Page Configuration ---
 st.set_page_config(page_title="Assembly Extractor", layout="wide")
 
-# --- Google Sheets Database Logic ---
+# ==========================================
+# DATABASE LOGIC (Google Sheets)
+# ==========================================
 def load_all_modules_from_gsheets():
     """Load all modules from Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # ttl=0 ensures we always pull the freshest data, not a cached version
+        # ttl=0 ensures we always pull the freshest data
         df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
         
         loaded_modules = {}
@@ -32,26 +34,44 @@ def load_all_modules_from_gsheets():
 
 def save_module_to_gsheets(module_name, bom_df):
     """Save or update a module's DataFrame in Google Sheets."""
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
-    
-    bom_json = bom_df.to_json(orient="records")
-    new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json}])
-    
-    if not df.empty and "Module_Name" in df.columns:
-        # Remove the old row for this module, if it exists
-        df = df[df["Module_Name"] != module_name]
-        # Append the updated row
-        df = pd.concat([df, new_row], ignore_index=True)
-    else:
-        df = new_row
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
         
-    # Push the entire updated dataframe back to the sheet
-    conn.update(worksheet="Sheet1", data=df)
-    # Clear streamlit's internal cache so the next read is instant
-    st.cache_data.clear()
+        bom_json = bom_df.to_json(orient="records")
+        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json}])
+        
+        if not df.empty and "Module_Name" in df.columns:
+            # Remove the old row for this module, if it exists
+            df = df[df["Module_Name"] != module_name]
+            # Append the updated row
+            df = pd.concat([df, new_row], ignore_index=True)
+        else:
+            df = new_row
+            
+        # Push the entire updated dataframe back to the sheet
+        conn.update(worksheet="Sheet1", data=df)
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to save to Google Sheets. Error: {e}")
 
-# --- Authentication Logic ---
+def delete_module_from_gsheets(module_name):
+    """Delete a module from Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        if not df.empty and "Module_Name" in df.columns:
+            # Keep everything EXCEPT the module we want to delete
+            df = df[df["Module_Name"] != module_name]
+            conn.update(worksheet="Sheet1", data=df)
+            st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to delete from Google Sheets. Error: {e}")
+
+# ==========================================
+# AUTHENTICATION LOGIC
+# ==========================================
 def check_password():
     def password_entered():
         if st.session_state["password"] == st.secrets["app_password"]:
@@ -70,7 +90,9 @@ def check_password():
     else:
         return True
 
-# --- Helper Function: Extract Data from PDF ---
+# ==========================================
+# PDF PARSING LOGIC
+# ==========================================
 def process_pdf(pdf_bytes):
     all_bom_data = []
     row_pattern = re.compile(r'^(\d+)\s+([^\s]+)\s+([\d\.,]+)\s+(.+)$')
@@ -119,6 +141,8 @@ if check_password():
     # --- Sidebar Navigation ---
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to", ["Upload New Module", "Dashboard"])
+    
+    st.sidebar.divider()
     if st.sidebar.button("Log Out"):
         st.session_state["password_correct"] = False
         st.session_state.selected_module = None
@@ -163,19 +187,38 @@ if check_password():
     # PAGE 2: DASHBOARD (with Master-Detail View)
     # ==========================================
     elif page == "Dashboard":
+        
         # --- DETAIL VIEW (FULL WINDOW) ---
         if st.session_state.selected_module:
             module_name = st.session_state.selected_module
-            module_data = st.session_state.modules_db[module_name]
-            df = module_data["bom"]
-
-            if st.button("← Back to Dashboard"):
+            module_data = st.session_state.modules_db.get(module_name)
+            
+            # Failsafe in case module was deleted but state wasn't cleared
+            if not module_data:
                 st.session_state.selected_module = None
                 st.rerun()
+                
+            df = module_data["bom"]
+
+            # --- Top Navigation & Actions ---
+            nav_col1, nav_col2 = st.columns([8, 2])
+            with nav_col1:
+                if st.button("← Back to Dashboard"):
+                    st.session_state.selected_module = None
+                    st.rerun()
+            with nav_col2:
+                if st.button("🗑️ Delete Module", type="primary", use_container_width=True):
+                    with st.spinner("Deleting module..."):
+                        delete_module_from_gsheets(module_name)
+                        if module_name in st.session_state.modules_db:
+                            del st.session_state.modules_db[module_name]
+                        st.session_state.selected_module = None
+                        st.rerun()
 
             st.title(f"📦 Module: {module_name}")
             st.divider()
 
+            # --- Progress Calculation & Display ---
             total_items = len(df)
             completed_items = df["Completed"].sum()
             progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
@@ -193,6 +236,7 @@ if check_password():
             
             st.subheader("📝 Bill of Materials Checklist")
             
+            # --- Interactive Form ---
             with st.form(key=f"form_{module_name}"):
                 edited_df = st.data_editor(
                     df,
@@ -224,7 +268,9 @@ if check_password():
             else:
                 st.write("Select a module to view its checklist.")
                 st.divider()
+                
                 module_items = list(st.session_state.modules_db.items())
+                # Chunk the items into rows of 3 columns
                 for i in range(0, len(module_items), 3):
                     cols = st.columns(3)
                     for j in range(3):
