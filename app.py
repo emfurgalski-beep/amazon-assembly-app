@@ -119,25 +119,29 @@ if check_password():
                                 st.progress(progress_percentage / 100.0)
                                 st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
 
-                                # --- NEW: Add success indicators for 100% completion ---
                                 if progress_percentage == 100:
                                     st.success("Module Complete! 🎉")
                                     if st.button("Celebrate!", key=f"celebrate_{module_name}"):
                                         st.balloons()
-                                # --- End of new code ---
 
                                 with st.expander("Open Checklist"):
-                                    edited_df = st.data_editor(
-                                        df,
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        key=f"editor_{module_name}",
-                                        column_config={
-                                            "Completed": st.column_config.CheckboxColumn("Done?", default=False),
-                                            "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
-                                            "UIN": st.column_config.TextColumn("UIN", disabled=True),
-                                            "Quantity": st.column_config.TextColumn("Qty", disabled=True),
-                                            "Description": st.column_config.TextColumn("Description", disabled=True)
-                                        }
-                                    )
-                                    st.session_state.modules_db[module_name]["bom"] = edited_df
+                                    # --- NEW: Wrap the data editor in a form to allow batch checking ---
+                                    with st.form(key=f"form_{module_name}"):
+                                        edited_df = st.data_editor(
+                                            df,
+                                            hide_index=True,
+                                            use_container_width=True,
+                                            column_config={
+                                                "Completed": st.column_config.CheckboxColumn("Done?", default=False),
+                                                "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
+                                                "UIN": st.column_config.TextColumn("UIN", disabled=True),
+                                                "Quantity": st.column_config.TextColumn("Qty", disabled=True),
+                                                "Description": st.column_config.TextColumn("Description", disabled=True)
+                                            }
+                                        )
+                                        # The submit button executes the save
+                                        submit_progress = st.form_submit_button("💾 Save Progress")
+                                        
+                                    if submit_progress:
+                                        st.session_state.modules_db[module_name]["bom"] = edited_df
+                                        st.rerun() # Instantly refreshes the app to update the progress bar
