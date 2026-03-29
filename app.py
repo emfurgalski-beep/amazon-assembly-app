@@ -311,35 +311,40 @@ if check_password():
             
             st.subheader("📝 Bill of Materials Checklist")
             
+            user_role = st.session_state.get("user_role", "Admin")
+            can_edit_collected = user_role in ["Admin", "Worker"]
+            can_edit_prekited = user_role in ["Admin", "Inventory"]
+            can_edit_assembled = user_role in ["Admin", "Worker"]
+
             # --- Bulk Actions ---
             b_col1, b_col2, b_col3, b_col4, b_col5, b_col6 = st.columns(6)
             with b_col1:
-                if st.button("📦 Collect All", use_container_width=True):
+                if st.button("📦 Collect All", use_container_width=True, disabled=not can_edit_collected):
                     st.session_state.modules_db[module_name]["bom"]["Collected"] = True
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col2:
-                if st.button("🔄 Prekit All", use_container_width=True):
+                if st.button("🔄 Prekit All", use_container_width=True, disabled=not can_edit_prekited):
                     st.session_state.modules_db[module_name]["bom"]["Prekited"] = True
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col3:
-                if st.button("✅ Assemble All", use_container_width=True):
+                if st.button("✅ Assemble All", use_container_width=True, disabled=not can_edit_assembled):
                     st.session_state.modules_db[module_name]["bom"]["Completed"] = True
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col4:
-                if st.button("📦 Uncollect All", use_container_width=True):
+                if st.button("📦 Uncollect All", use_container_width=True, disabled=not can_edit_collected):
                     st.session_state.modules_db[module_name]["bom"]["Collected"] = False
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col5:
-                if st.button("🔄 Unprekit All", use_container_width=True):
+                if st.button("🔄 Unprekit All", use_container_width=True, disabled=not can_edit_prekited):
                     st.session_state.modules_db[module_name]["bom"]["Prekited"] = False
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col6:
-                if st.button("❌ Unassemble All", use_container_width=True):
+                if st.button("❌ Unassemble All", use_container_width=True, disabled=not can_edit_assembled):
                     st.session_state.modules_db[module_name]["bom"]["Completed"] = False
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
@@ -351,9 +356,9 @@ if check_password():
                     hide_index=True,
                     use_container_width=True,
                     column_config={
-                        "Collected": st.column_config.CheckboxColumn("Collected?", default=False),
-                        "Prekited": st.column_config.CheckboxColumn("Prekited?", default=False),
-                        "Completed": st.column_config.CheckboxColumn("Assembled?", default=False),
+                        "Collected": st.column_config.CheckboxColumn("Collected?", default=False, disabled=not can_edit_collected),
+                        "Prekited": st.column_config.CheckboxColumn("Prekited?", default=False, disabled=not can_edit_prekited),
+                        "Completed": st.column_config.CheckboxColumn("Assembled?", default=False, disabled=not can_edit_assembled),
                         "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
                         "UIN": st.column_config.TextColumn("UIN", disabled=True),
                         "Quantity": st.column_config.TextColumn("Qty", disabled=True),
