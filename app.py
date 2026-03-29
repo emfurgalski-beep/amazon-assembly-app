@@ -5,6 +5,7 @@ import io
 import re
 import os
 import json
+import datetime
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
@@ -36,7 +37,8 @@ def load_all_modules_from_gsheets():
                         bom_df["Notes"] = ""
                     if "UIN" in bom_df.columns:
                         bom_df = bom_df.sort_values(by="UIN", ascending=True).reset_index(drop=True)
-                    loaded_modules[name] = {"bom": bom_df}
+                    last_updated = row["Last_Updated"] if "Last_Updated" in df.columns else "Unknown"
+                    loaded_modules[name] = {"bom": bom_df, "last_updated": last_updated}
         return loaded_modules
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets. Check your secrets! Error: {e}")
@@ -48,8 +50,9 @@ def save_module_to_gsheets(module_name, bom_df):
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
         
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         bom_json = bom_df.to_json(orient="records")
-        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json}])
+        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json, "Last_Updated": current_time}])
         
         if not df.empty and "Module_Name" in df.columns:
             # Remove the old row for this module, if it exists
@@ -190,6 +193,8 @@ if check_password():
         
     # --- Hot-Reload Patch for Legacy Sessions ---
     for name, data in st.session_state.modules_db.items():
+        if "last_updated" not in data:
+            data["last_updated"] = "Unknown"
         if "bom" in data:
             if "Collected" not in data["bom"].columns:
                 data["bom"].insert(0, "Collected", False)
@@ -240,7 +245,7 @@ if check_password():
                         
                         if not bom_df.empty:
                             # Update local memory
-                            st.session_state.modules_db[module_name] = {"bom": bom_df}
+                            st.session_state.modules_db[module_name] = {"bom": bom_df, "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                             # Push to Google Sheets
                             save_module_to_gsheets(module_name, bom_df)
                             
@@ -329,31 +334,37 @@ if check_password():
             with b_col1:
                 if st.button("📦 Collect All", use_container_width=True, disabled=not can_edit_collected):
                     st.session_state.modules_db[module_name]["bom"]["Collected"] = True
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col2:
                 if st.button("🔄 Prekit All", use_container_width=True, disabled=not can_edit_prekited):
                     st.session_state.modules_db[module_name]["bom"]["Prekited"] = True
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col3:
                 if st.button("✅ Assemble All", use_container_width=True, disabled=not can_edit_assembled):
                     st.session_state.modules_db[module_name]["bom"]["Completed"] = True
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col4:
                 if st.button("📦 Uncollect All", use_container_width=True, disabled=not can_edit_collected):
                     st.session_state.modules_db[module_name]["bom"]["Collected"] = False
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col5:
                 if st.button("🔄 Unprekit All", use_container_width=True, disabled=not can_edit_prekited):
                     st.session_state.modules_db[module_name]["bom"]["Prekited"] = False
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with b_col6:
                 if st.button("❌ Unassemble All", use_container_width=True, disabled=not can_edit_assembled):
                     st.session_state.modules_db[module_name]["bom"]["Completed"] = False
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
 
@@ -398,6 +409,7 @@ if check_password():
                 with st.spinner("Saving to Google Sheets..."):
                     # Update local memory
                     st.session_state.modules_db[module_name]["bom"] = edited_df
+                    st.session_state.modules_db[module_name]["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     # Update Google Sheets
                     save_module_to_gsheets(module_name, edited_df)
                 st.rerun()
@@ -448,8 +460,32 @@ if check_password():
                     chart_df = pd.DataFrame(chart_data).set_index("Module")
                     st.bar_chart(chart_df, y=["Collected %", "Prekited %", "Completed %"])
 
+                # --- Global Issues Tracker ---
+                with st.expander("🚨 Global Issues & Bottlenecks", expanded=False):
+                    all_issues = []
+                    for name, data in st.session_state.modules_db.items():
+                        df_mod = data["bom"]
+                        issues_df = df_mod[df_mod["Notes"].fillna("").astype(str).str.strip() != ""]
+                        if not issues_df.empty:
+                            issues_copy = issues_df.copy()
+                            issues_copy.insert(0, "Module", name)
+                            all_issues.append(issues_copy)
+                            
+                    if all_issues:
+                        combined_issues = pd.concat(all_issues, ignore_index=True)
+                        st.dataframe(combined_issues, hide_index=True, use_container_width=True)
+                    else:
+                        st.success("No issues or notes logged across any modules! 🎉")
+
                 st.divider()
                 
+                # --- Smart Quick Filters ---
+                quick_filter = st.radio(
+                    "🎯 Smart Quick-Filters", 
+                    ["All Modules", "📦 Needs Collecting", "🔄 Ready for Prekit", "🛠️ Ready for Assembly"],
+                    horizontal=True
+                )
+
                 # --- Search and Sort Controls ---
                 ctrl_col1, ctrl_col2 = st.columns([3, 1])
                 with ctrl_col1:
@@ -469,7 +505,18 @@ if check_password():
                         col_pct = int((col / tot) * 100) if tot > 0 else 0
                         pre_pct = int((pre / tot) * 100) if tot > 0 else 0
                         pct = int((comp / tot) * 100) if tot > 0 else 0
-                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "tot": tot, "comp": comp})
+                        
+                        # Apply Quick Filters
+                        if quick_filter == "📦 Needs Collecting" and col_pct >= 100:
+                            continue
+                        if quick_filter == "🔄 Ready for Prekit" and (col_pct < 100 or pre_pct >= 100):
+                            continue
+                        if quick_filter == "🛠️ Ready for Assembly" and (pre_pct < 100 or pct >= 100):
+                            continue
+                            
+                        last_updated = data.get("last_updated", "Unknown")
+                        
+                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "tot": tot, "comp": comp, "last_updated": last_updated})
                 
                 # Apply Sorting
                 if sort_order == "Name (A-Z)":
@@ -495,6 +542,7 @@ if check_password():
                                 with cols[j]:
                                     with st.container(border=True):
                                         st.subheader(f"📦 {module_name}")
+                                        st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
                                         # Show progress in columns
                                         p_col1, p_col2, p_col3 = st.columns(3)
                                         with p_col1:
