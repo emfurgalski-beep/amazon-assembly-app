@@ -4,41 +4,99 @@ import pandas as pd
 import io
 import re
 import os
+import json
+from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
-# MUST be the first Streamlit command!
 st.set_page_config(page_title="Assembly Extractor", layout="wide")
 
-# --- Authentication Logic ---
+# ==========================================
+# DATABASE LOGIC (Google Sheets)
+# ==========================================
+def load_all_modules_from_gsheets():
+    """Load all modules from Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        # ttl=0 ensures we always pull the freshest data
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        loaded_modules = {}
+        if not df.empty and "Module_Name" in df.columns and "BOM_JSON" in df.columns:
+            for _, row in df.iterrows():
+                name = row["Module_Name"]
+                bom_json_str = row["BOM_JSON"]
+                if pd.notna(bom_json_str):
+                    bom_df = pd.read_json(io.StringIO(bom_json_str), orient="records")
+                    loaded_modules[name] = {"bom": bom_df}
+        return loaded_modules
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets. Check your secrets! Error: {e}")
+        return {}
+
+def save_module_to_gsheets(module_name, bom_df):
+    """Save or update a module's DataFrame in Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        bom_json = bom_df.to_json(orient="records")
+        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json}])
+        
+        if not df.empty and "Module_Name" in df.columns:
+            # Remove the old row for this module, if it exists
+            df = df[df["Module_Name"] != module_name]
+            # Append the updated row
+            df = pd.concat([df, new_row], ignore_index=True)
+        else:
+            df = new_row
+            
+        # Push the entire updated dataframe back to the sheet
+        conn.update(worksheet="Sheet1", data=df)
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to save to Google Sheets. Error: {e}")
+
+def delete_module_from_gsheets(module_name):
+    """Delete a module from Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        if not df.empty and "Module_Name" in df.columns:
+            # Keep everything EXCEPT the module we want to delete
+            df = df[df["Module_Name"] != module_name]
+            conn.update(worksheet="Sheet1", data=df)
+            st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to delete from Google Sheets. Error: {e}")
+
+# ==========================================
+# AUTHENTICATION LOGIC
+# ==========================================
 def check_password():
-    """Returns `True` if the user entered the correct password."""
     def password_entered():
-        # Check if the entered password matches the secret password
         if st.session_state["password"] == st.secrets["app_password"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Clear the password from memory for security
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password
         st.text_input("Please enter the password to access the dashboard", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
-        # Password was incorrect, show input again with an error
         st.text_input("Please enter the password to access the dashboard", type="password", on_change=password_entered, key="password")
         st.error("😕 Password incorrect")
         return False
     else:
-        # Password correct
         return True
 
-# --- Helper Function: Extract Data from PDF ---
+# ==========================================
+# PDF PARSING LOGIC
+# ==========================================
 def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
     """Extracts BOM data from PDF bytes and returns it as a Pandas DataFrame."""
     all_bom_data = []
-    
-    # Extract BOM
     row_pattern = re.compile(r'^(\d+)\s+([^\s]+)\s+([\d\.,]+)\s+(.+)$')
     in_bom_section = False
 
@@ -87,23 +145,24 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
         
     return pd.DataFrame(all_bom_data)
 
-
 # ==========================================
 # MAIN APP LOGIC (Protected by Password)
 # ==========================================
 if check_password():
-    
-    # --- Initialize Session State (App Memory) ---
+    # --- Initialize session state from Google Sheets ---
     if 'modules_db' not in st.session_state:
-        st.session_state.modules_db = {}
+        st.session_state.modules_db = load_all_modules_from_gsheets()
+    if 'selected_module' not in st.session_state:
+        st.session_state.selected_module = None
 
     # --- Sidebar Navigation ---
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to", ["Upload New Module", "Dashboard"])
     
-    # Add a logout button to the sidebar
+    st.sidebar.divider()
     if st.sidebar.button("Log Out"):
         st.session_state["password_correct"] = False
+        st.session_state.selected_module = None
         st.rerun()
 
     # ==========================================
@@ -111,82 +170,140 @@ if check_password():
     # ==========================================
     if page == "Upload New Module":
         st.title("📤 Upload Amazon Assembly Module")
-        st.write("Upload a PDF to extract its Bill of Materials and save it to your dashboard.")
-
-        uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
-
-        if uploaded_file is not None:
-            module_name = os.path.splitext(uploaded_file.name)[0]
+        st.write("Upload one or more PDFs to extract their Bill of Materials and save them to your dashboard.")
+        
+        uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
+        
+        if uploaded_files:
+            success_count = 0
+            for uploaded_file in uploaded_files:
+                module_name = os.path.splitext(uploaded_file.name)[0]
+                
+                if module_name in st.session_state.modules_db:
+                    st.warning(f"Module '{module_name}' is already in your Dashboard!")
+                else:
+                    with st.spinner(f"Extracting BOM from {module_name}..."):
+                        pdf_bytes = uploaded_file.read()
+                        bom_df = process_pdf(pdf_bytes)
+                        
+                        if not bom_df.empty:
+                            # Update local memory
+                            st.session_state.modules_db[module_name] = {"bom": bom_df}
+                            # Push to Google Sheets
+                            save_module_to_gsheets(module_name, bom_df)
+                            
+                            st.success(f"Successfully processed and saved '{module_name}'!")
+                            success_count += 1
+                        else:
+                            st.error(f"Could not find a valid BOM in '{module_name}'.")
             
-            if module_name in st.session_state.modules_db:
-                st.warning(f"Module '{module_name}' is already in your Dashboard!")
-            else:
-                with st.spinner("Extracting BOM..."):
-                    pdf_bytes = uploaded_file.read()
-                    bom_df = process_pdf(pdf_bytes)
-                    
-                    if not bom_df.empty:
-                        # Save the results to our app's memory
-                        st.session_state.modules_db[module_name] = {"bom": bom_df}
-                        st.success(f"Successfully processed and saved '{module_name}'!")
-                        st.balloons()
-                    else:
-                        st.error("Could not find a valid BOM in this document.")
+            if success_count > 0:
+                st.balloons()
 
     # ==========================================
-    # PAGE 2: DASHBOARD
+    # PAGE 2: DASHBOARD (with Master-Detail View)
     # ==========================================
     elif page == "Dashboard":
-        st.title("📊 Module Dashboard")
         
-        if not st.session_state.modules_db:
-            st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
-        else:
-            st.write("Overview of all extracted modules. Click 'Open Checklist' to view and update progress.")
+        # --- DETAIL VIEW (FULL WINDOW) ---
+        if st.session_state.selected_module:
+            module_name = st.session_state.selected_module
+            module_data = st.session_state.modules_db.get(module_name)
+            
+            # Failsafe in case module was deleted but state wasn't cleared
+            if not module_data:
+                st.session_state.selected_module = None
+                st.rerun()
+                
+            df = module_data["bom"]
+
+            # --- Top Navigation & Actions ---
+            nav_col1, nav_col2 = st.columns([8, 2])
+            with nav_col1:
+                if st.button("← Back to Dashboard"):
+                    st.session_state.selected_module = None
+                    st.rerun()
+            with nav_col2:
+                if st.button("🗑️ Delete Module", type="primary", use_container_width=True):
+                    with st.spinner("Deleting module..."):
+                        delete_module_from_gsheets(module_name)
+                        if module_name in st.session_state.modules_db:
+                            del st.session_state.modules_db[module_name]
+                        st.session_state.selected_module = None
+                        st.rerun()
+
+            st.title(f"📦 Module: {module_name}")
             st.divider()
 
-            # Convert the dictionary of modules into a list so we can chunk it
-            module_items = list(st.session_state.modules_db.items())
+            # --- Progress Calculation & Display ---
+            total_items = len(df)
+            completed_items = df["Completed"].sum()
+            progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
             
-            # Chunk into rows of 3 to force vertical alignment
-            for i in range(0, len(module_items), 3):
-                cols = st.columns(3) # Create exactly 3 columns per row
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(progress_percentage / 100.0)
+            with col2:
+                st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
+            
+            if progress_percentage == 100:
+                st.success("Module Complete! 🎉")
+                if st.button("Celebrate!", key=f"celebrate_{module_name}"):
+                    st.balloons()
+            
+            st.subheader("📝 Bill of Materials Checklist")
+            
+            # --- Interactive Form ---
+            with st.form(key=f"form_{module_name}"):
+                edited_df = st.data_editor(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Completed": st.column_config.CheckboxColumn("Done?", default=False),
+                        "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
+                        "UIN": st.column_config.TextColumn("UIN", disabled=True),
+                        "Quantity": st.column_config.TextColumn("Qty", disabled=True),
+                        "Description": st.column_config.TextColumn("Description", disabled=True)
+                    }
+                )
+                submit_progress = st.form_submit_button("💾 Save Progress")
                 
-                for j in range(3):
-                    # Check if we still have a module for this column slot
-                    if i + j < len(module_items):
-                        module_name, module_data = module_items[i + j]
-                        df = module_data["bom"]
+            if submit_progress:
+                with st.spinner("Saving to Google Sheets..."):
+                    # Update local memory
+                    st.session_state.modules_db[module_name]["bom"] = edited_df
+                    # Update Google Sheets
+                    save_module_to_gsheets(module_name, edited_df)
+                st.rerun()
 
-                        # --- Progress Calculation ---
-                        total_items = len(df)
-                        completed_items = df["Completed"].sum() 
-                        progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
+        # --- MASTER VIEW (GRID) ---
+        else:
+            st.title("📊 Module Dashboard")
+            if not st.session_state.modules_db:
+                st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
+            else:
+                st.write("Select a module to view its checklist.")
+                st.divider()
+                
+                module_items = list(st.session_state.modules_db.items())
+                # Chunk the items into rows of 3 columns
+                for i in range(0, len(module_items), 3):
+                    cols = st.columns(3)
+                    for j in range(3):
+                        if i + j < len(module_items):
+                            module_name, module_data = module_items[i + j]
+                            df = module_data["bom"]
+                            total_items = len(df)
+                            completed_items = df["Completed"].sum()
+                            progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
 
-                        # Place content within the specific column
-                        with cols[j]:
-                            # Wrap the module card in a border
-                            with st.container(border=True):
-                                st.subheader(f"📦 {module_name}")
-                                
-                                st.progress(progress_percentage / 100.0)
-                                st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
-                                
-                                # Use expander for the table so the grid remains clean
-                                with st.expander("Open Checklist"):
-                                    edited_df = st.data_editor(
-                                        df,
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        key=f"editor_{module_name}", # Unique key per module
-                                        column_config={
-                                            "Completed": st.column_config.CheckboxColumn("Done?", default=False),
-                                            "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
-                                            "UIN": st.column_config.TextColumn("UIN", disabled=True),
-                                            "Quantity": st.column_config.TextColumn("Qty", disabled=True),
-                                            "Description": st.column_config.TextColumn("Description", disabled=True)
-                                        }
-                                    )
+                            with cols[j]:
+                                with st.container(border=True):
+                                    st.subheader(f"📦 {module_name}")
+                                    st.progress(progress_percentage / 100.0)
+                                    st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
                                     
-                                    # Save checklist interactions back to memory
-                                    st.session_state.modules_db[module_name]["bom"] = edited_df
+                                    if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
+                                        st.session_state.selected_module = module_name
+                                        st.rerun()
