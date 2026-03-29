@@ -354,10 +354,16 @@ if check_password():
                 # 1. Highlight rows with issues/notes in light red
                 if pd.notna(row.get('Notes')) and str(row.get('Notes')).strip() != "":
                     return ['background-color: rgba(255, 75, 75, 0.3)'] * len(row)
-                # 2. Highlight fully completed rows in light green
+                # 2. Highlight fully assembled rows in light green
                 elif row.get('Completed'):
                     return ['background-color: rgba(46, 204, 113, 0.3)'] * len(row)
-                # 3. Default color for everything else
+                # 3. Highlight prekited rows in light blue
+                elif row.get('Prekited'):
+                    return ['background-color: rgba(52, 152, 219, 0.3)'] * len(row)
+                # 4. Highlight collected rows in light orange
+                elif row.get('Collected'):
+                    return ['background-color: rgba(243, 156, 18, 0.3)'] * len(row)
+                # 5. Default color for everything else
                 return [''] * len(row)
                 
             styled_df = df.style.apply(highlight_rows, axis=1)
