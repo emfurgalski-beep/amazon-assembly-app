@@ -193,21 +193,22 @@ if check_password():
             if "Notes" not in data["bom"].columns:
                 data["bom"]["Notes"] = ""
 
-    # --- Sidebar Navigation ---
-    st.sidebar.title("Navigation")
-    st.sidebar.caption(f"👤 Role: {st.session_state.get('user_role', 'Admin')}")
-    
-    pages = ["Dashboard"]
-    if st.session_state.get("user_role", "Admin") == "Admin":
-        pages.insert(0, "Upload New Module")
-        
-    page = st.sidebar.radio("Go to", pages)
-    
-    st.sidebar.divider()
-    if st.sidebar.button("Log Out"):
-        st.session_state["password_correct"] = False
-        st.session_state.selected_module = None
-        st.rerun()
+    # --- Top Navigation ---
+    top_col1, top_col2, top_col3 = st.columns([2, 6, 2])
+    with top_col1:
+        st.write(f"**👤 Role:** {st.session_state.get('user_role', 'Admin')}")
+    with top_col2:
+        pages = ["Dashboard"]
+        if st.session_state.get("user_role", "Admin") == "Admin":
+            pages.insert(0, "Upload New Module")
+        page = st.radio("Navigation", pages, horizontal=True, label_visibility="collapsed")
+    with top_col3:
+        if st.button("Log Out", use_container_width=True):
+            st.session_state["password_correct"] = False
+            st.session_state.selected_module = None
+            st.rerun()
+            
+    st.divider()
 
     # ==========================================
     # PAGE 1: UPLOAD NEW MODULE
