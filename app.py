@@ -158,6 +158,11 @@ if check_password():
         st.session_state.modules_db = load_all_modules_from_gsheets()
     if 'selected_module' not in st.session_state:
         st.session_state.selected_module = None
+        
+    # --- Hot-Reload Patch for Legacy Sessions ---
+    for name, data in st.session_state.modules_db.items():
+        if "bom" in data and "Collected" not in data["bom"].columns:
+            data["bom"].insert(0, "Collected", False)
 
     # --- Sidebar Navigation ---
     st.sidebar.title("Navigation")
