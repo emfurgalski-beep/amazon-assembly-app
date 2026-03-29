@@ -256,6 +256,21 @@ if check_password():
             
             st.subheader("📝 Bill of Materials Checklist")
             
+            # --- Bulk Actions ---
+            bulk_col1, bulk_col2, _ = st.columns([2, 2, 6])
+            with bulk_col1:
+                if st.button("✅ Check All", use_container_width=True):
+                    with st.spinner("Checking all items..."):
+                        st.session_state.modules_db[module_name]["bom"]["Completed"] = True
+                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+            with bulk_col2:
+                if st.button("❌ Uncheck All", use_container_width=True):
+                    with st.spinner("Unchecking all items..."):
+                        st.session_state.modules_db[module_name]["bom"]["Completed"] = False
+                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+
             # --- Interactive Form ---
             with st.form(key=f"form_{module_name}"):
                 edited_df = st.data_editor(
