@@ -30,6 +30,8 @@ def load_all_modules_from_gsheets():
                     # Gracefully handle legacy data by injecting the new column if it's missing
                     if "Collected" not in bom_df.columns:
                         bom_df.insert(0, "Collected", False)
+                    if "Notes" not in bom_df.columns:
+                        bom_df["Notes"] = ""
                     loaded_modules[name] = {"bom": bom_df}
         return loaded_modules
     except Exception as e:
@@ -78,8 +80,26 @@ def delete_module_from_gsheets(module_name):
 # ==========================================
 def check_password():
     def password_entered():
-        if st.session_state["password"] == st.secrets["app_password"]:
+        pwd = st.session_state["password"]
+        # Admin Login
+        if "admin_password" in st.secrets and pwd == st.secrets["admin_password"]:
             st.session_state["password_correct"] = True
+            st.session_state["user_role"] = "Admin"
+            del st.session_state["password"]
+        # Worker Login
+        elif "worker_password" in st.secrets and pwd == st.secrets["worker_password"]:
+            st.session_state["password_correct"] = True
+            st.session_state["user_role"] = "Worker"
+            del st.session_state["password"]
+        # Inventory Login
+        elif "inventory_password" in st.secrets and pwd == st.secrets["inventory_password"]:
+            st.session_state["password_correct"] = True
+            st.session_state["user_role"] = "Inventory"
+            del st.session_state["password"]
+        # Fallback to legacy password (Grants Admin)
+        elif "app_password" in st.secrets and pwd == st.secrets["app_password"]:
+            st.session_state["password_correct"] = True
+            st.session_state["user_role"] = "Admin"
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
@@ -129,7 +149,8 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
                                 "BOM_ID": match.group(1),
                                 "UIN": match.group(2),
                                 "Quantity": match.group(3),
-                                "Description": match.group(4)
+                                "Description": match.group(4),
+                                "Notes": "" # New column for Issues/Notes
                             })
                         elif all_bom_data:
                             # Stop rules and text wrapping
@@ -161,12 +182,21 @@ if check_password():
         
     # --- Hot-Reload Patch for Legacy Sessions ---
     for name, data in st.session_state.modules_db.items():
-        if "bom" in data and "Collected" not in data["bom"].columns:
-            data["bom"].insert(0, "Collected", False)
+        if "bom" in data:
+            if "Collected" not in data["bom"].columns:
+                data["bom"].insert(0, "Collected", False)
+            if "Notes" not in data["bom"].columns:
+                data["bom"]["Notes"] = ""
 
     # --- Sidebar Navigation ---
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Upload New Module", "Dashboard"])
+    st.sidebar.caption(f"👤 Role: {st.session_state.get('user_role', 'Admin')}")
+    
+    pages = ["Dashboard"]
+    if st.session_state.get("user_role", "Admin") == "Admin":
+        pages.insert(0, "Upload New Module")
+        
+    page = st.sidebar.radio("Go to", pages)
     
     st.sidebar.divider()
     if st.sidebar.button("Log Out"):
@@ -236,13 +266,14 @@ if check_password():
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Export CSV", data=csv, file_name=f"{module_name}_bom.csv", mime="text/csv", use_container_width=True)
             with nav_col3:
-                if st.button("🗑️ Delete", type="primary", use_container_width=True):
-                    with st.spinner("Deleting module..."):
-                        delete_module_from_gsheets(module_name)
-                        if module_name in st.session_state.modules_db:
-                            del st.session_state.modules_db[module_name]
-                        st.session_state.selected_module = None
-                        st.rerun()
+                if st.session_state.get("user_role", "Admin") == "Admin":
+                    if st.button("🗑️ Delete", type="primary", use_container_width=True):
+                        with st.spinner("Deleting module..."):
+                            delete_module_from_gsheets(module_name)
+                            if module_name in st.session_state.modules_db:
+                                del st.session_state.modules_db[module_name]
+                            st.session_state.selected_module = None
+                            st.rerun()
 
             st.title(f"📦 Module: {module_name}")
             st.divider()
@@ -313,7 +344,8 @@ if check_password():
                         "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
                         "UIN": st.column_config.TextColumn("UIN", disabled=True),
                         "Quantity": st.column_config.TextColumn("Qty", disabled=True),
-                        "Description": st.column_config.TextColumn("Description", disabled=True)
+                        "Description": st.column_config.TextColumn("Description", disabled=True),
+                        "Notes": st.column_config.TextColumn("Issue / Notes", default="")
                     }
                 )
                 submit_progress = st.form_submit_button("💾 Save Progress")
