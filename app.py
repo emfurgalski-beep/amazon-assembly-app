@@ -464,15 +464,17 @@ if check_password():
                                 with cols[j]:
                                     with st.container(border=True):
                                         st.subheader(f"📦 {module_name}")
-                                        
-                                        st.caption(f"📦 Collected ({mod_dict['col_pct']}%)")
-                                        st.progress(mod_dict["col_pct"] / 100.0)
-                                        
-                                        st.caption(f"🔄 Prekited ({mod_dict['pre_pct']}%)")
-                                        st.progress(mod_dict["pre_pct"] / 100.0)
-                                        
-                                        st.caption(f"🛠️ Assembled ({mod_dict['pct']}%)")
-                                        st.progress(mod_dict["pct"] / 100.0)
+                                        # Show progress in columns
+                                        p_col1, p_col2, p_col3 = st.columns(3)
+                                        with p_col1:
+                                            st.caption("📦 Collected")
+                                            st.progress(mod_dict["col_pct"] / 100.0)
+                                        with p_col2:
+                                            st.caption("🔄 Prekited")
+                                            st.progress(mod_dict["pre_pct"] / 100.0)
+                                        with p_col3:
+                                            st.caption("🛠️ Assembled")
+                                            st.progress(mod_dict["pct"] / 100.0)
                                         
                                         if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
                                             st.session_state.selected_module = module_name
