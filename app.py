@@ -35,7 +35,7 @@ def load_all_modules_from_gsheets():
                     if "Notes" not in bom_df.columns:
                         bom_df["Notes"] = ""
                     if "UIN" in bom_df.columns:
-                        bom_df = bom_df.sort_values(by="UIN", ascending=False).reset_index(drop=True)
+                        bom_df = bom_df.sort_values(by="UIN", ascending=True).reset_index(drop=True)
                     loaded_modules[name] = {"bom": bom_df}
         return loaded_modules
     except Exception as e:
@@ -175,7 +175,7 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
         
     df = pd.DataFrame(all_bom_data)
     if not df.empty and "UIN" in df.columns:
-        df = df.sort_values(by="UIN", ascending=False).reset_index(drop=True)
+        df = df.sort_values(by="UIN", ascending=True).reset_index(drop=True)
     return df
 
 # ==========================================
@@ -198,7 +198,7 @@ if check_password():
             if "Notes" not in data["bom"].columns:
                 data["bom"]["Notes"] = ""
             if "UIN" in data["bom"].columns:
-                data["bom"] = data["bom"].sort_values(by="UIN", ascending=False).reset_index(drop=True)
+                data["bom"] = data["bom"].sort_values(by="UIN", ascending=True).reset_index(drop=True)
 
     # --- Top Navigation ---
     top_col1, top_col2, top_col3 = st.columns([2, 6, 2])
