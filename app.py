@@ -218,13 +218,16 @@ if check_password():
             df = module_data["bom"]
 
             # --- Top Navigation & Actions ---
-            nav_col1, nav_col2 = st.columns([8, 2])
+            nav_col1, nav_col2, nav_col3 = st.columns([6, 2, 2])
             with nav_col1:
                 if st.button("← Back to Dashboard"):
                     st.session_state.selected_module = None
                     st.rerun()
             with nav_col2:
-                if st.button("🗑️ Delete Module", type="primary", use_container_width=True):
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Export CSV", data=csv, file_name=f"{module_name}_bom.csv", mime="text/csv", use_container_width=True)
+            with nav_col3:
+                if st.button("🗑️ Delete", type="primary", use_container_width=True):
                     with st.spinner("Deleting module..."):
                         delete_module_from_gsheets(module_name)
                         if module_name in st.session_state.modules_db:
@@ -284,26 +287,77 @@ if check_password():
                 st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
             else:
                 st.write("Select a module to view its checklist.")
+                
+                # --- Overall Progress Chart ---
+                with st.expander("📈 View Overall Progress", expanded=True):
+                    chart_data = []
+                    total_global_items = 0
+                    total_global_completed = 0
+                    
+                    for name, data in st.session_state.modules_db.items():
+                        df_mod = data["bom"]
+                        tot = len(df_mod)
+                        comp = df_mod["Completed"].sum()
+                        pct = int((comp / tot) * 100) if tot > 0 else 0
+                        chart_data.append({"Module": name, "Completion %": pct})
+                        total_global_items += tot
+                        total_global_completed += comp
+                        
+                    global_pct = int((total_global_completed / total_global_items) * 100) if total_global_items > 0 else 0
+                    
+                    prog_col1, prog_col2 = st.columns([1, 3])
+                    with prog_col1:
+                        st.metric("Overall Completion", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Total Items")
+                    with prog_col2:
+                        chart_df = pd.DataFrame(chart_data).set_index("Module")
+                        st.bar_chart(chart_df, y="Completion %")
+
                 st.divider()
                 
-                module_items = list(st.session_state.modules_db.items())
-                # Chunk the items into rows of 3 columns
-                for i in range(0, len(module_items), 3):
-                    cols = st.columns(3)
-                    for j in range(3):
-                        if i + j < len(module_items):
-                            module_name, module_data = module_items[i + j]
-                            df = module_data["bom"]
-                            total_items = len(df)
-                            completed_items = df["Completed"].sum()
-                            progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
-
-                            with cols[j]:
-                                with st.container(border=True):
-                                    st.subheader(f"📦 {module_name}")
-                                    st.progress(progress_percentage / 100.0)
-                                    st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
-                                    
-                                    if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
-                                        st.session_state.selected_module = module_name
-                                        st.rerun()
+                # --- Search and Sort Controls ---
+                ctrl_col1, ctrl_col2 = st.columns([3, 1])
+                with ctrl_col1:
+                    search_term = st.text_input("🔍 Search Modules", placeholder="Type to filter by module name...")
+                with ctrl_col2:
+                    sort_order = st.selectbox("↕️ Sort By", ["Name (A-Z)", "Name (Z-A)", "Completion (High - Low)", "Completion (Low - High)"])
+                
+                # Prepare filtered and calculated list
+                module_items = []
+                for name, data in st.session_state.modules_db.items():
+                    if search_term.lower() in name.lower():
+                        df_mod = data["bom"]
+                        tot = len(df_mod)
+                        comp = df_mod["Completed"].sum()
+                        pct = int((comp / tot) * 100) if tot > 0 else 0
+                        module_items.append({"name": name, "data": data, "pct": pct, "tot": tot, "comp": comp})
+                
+                # Apply Sorting
+                if sort_order == "Name (A-Z)":
+                    module_items = sorted(module_items, key=lambda x: x["name"].lower())
+                elif sort_order == "Name (Z-A)":
+                    module_items = sorted(module_items, key=lambda x: x["name"].lower(), reverse=True)
+                elif sort_order == "Completion (High - Low)":
+                    module_items = sorted(module_items, key=lambda x: x["pct"], reverse=True)
+                elif sort_order == "Completion (Low - High)":
+                    module_items = sorted(module_items, key=lambda x: x["pct"])
+                
+                if not module_items:
+                    st.warning("No modules found matching your search.")
+                else:
+                    # Chunk the items into rows of 3 columns
+                    for i in range(0, len(module_items), 3):
+                        cols = st.columns(3)
+                        for j in range(3):
+                            if i + j < len(module_items):
+                                mod_dict = module_items[i + j]
+                                module_name = mod_dict["name"]
+                                
+                                with cols[j]:
+                                    with st.container(border=True):
+                                        st.subheader(f"📦 {module_name}")
+                                        st.progress(mod_dict["pct"] / 100.0)
+                                        st.metric("Completion Status", f"{mod_dict['pct']}%", f"{mod_dict['comp']} / {mod_dict['tot']} Items")
+                                        
+                                        if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
+                                            st.session_state.selected_module = module_name
+                                            st.rerun()
