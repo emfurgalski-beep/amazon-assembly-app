@@ -352,9 +352,9 @@ if check_password():
 
             # --- Interactive Form ---
             def highlight_rows(row):
-                # 1. Highlight rows with issues/notes in light red
+                # 1. Highlight rows with issues/notes in bold red
                 if pd.notna(row.get('Notes')) and str(row.get('Notes')).strip() != "":
-                    return ['background-color: rgba(255, 75, 75, 0.3)'] * len(row)
+                    return ['background-color: #FF4B4B; color: white; font-weight: bold;'] * len(row)
                 # 2. Highlight fully assembled rows in light green
                 elif row.get('Completed'):
                     return ['background-color: rgba(46, 204, 113, 0.3)'] * len(row)
