@@ -27,6 +27,9 @@ def load_all_modules_from_gsheets():
                 bom_json_str = row["BOM_JSON"]
                 if pd.notna(bom_json_str):
                     bom_df = pd.read_json(io.StringIO(bom_json_str), orient="records")
+                    # Gracefully handle legacy data by injecting the new column if it's missing
+                    if "Collected" not in bom_df.columns:
+                        bom_df.insert(0, "Collected", False)
                     loaded_modules[name] = {"bom": bom_df}
         return loaded_modules
     except Exception as e:
@@ -121,6 +124,7 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
                         match = row_pattern.match(line)
                         if match:
                             all_bom_data.append({
+                                "Collected": False, # New column for Inventory
                                 "Completed": False, # Checkbox column defaults to False
                                 "BOM_ID": match.group(1),
                                 "UIN": match.group(2),
@@ -240,13 +244,22 @@ if check_password():
 
             # --- Progress Calculation & Display ---
             total_items = len(df)
+            collected_items = df["Collected"].sum()
             completed_items = df["Completed"].sum()
+            
+            collected_pct = int((collected_items / total_items) * 100) if total_items > 0 else 0
             progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
             
-            col1, col2 = st.columns([3, 1])
+            col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
             with col1:
-                st.progress(progress_percentage / 100.0)
+                st.write("**📦 Inventory Collected**")
+                st.progress(collected_pct / 100.0)
             with col2:
+                st.metric("Collected", f"{collected_pct}%", f"{collected_items} / {total_items}")
+            with col3:
+                st.write("**🛠️ Assembly Completed**")
+                st.progress(progress_percentage / 100.0)
+            with col4:
                 st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
             
             if progress_percentage == 100:
@@ -257,16 +270,28 @@ if check_password():
             st.subheader("📝 Bill of Materials Checklist")
             
             # --- Bulk Actions ---
-            bulk_col1, bulk_col2, _ = st.columns([2, 2, 6])
+            bulk_col1, bulk_col2, bulk_col3, bulk_col4 = st.columns(4)
             with bulk_col1:
-                if st.button("✅ Check All", use_container_width=True):
-                    with st.spinner("Checking all items..."):
-                        st.session_state.modules_db[module_name]["bom"]["Completed"] = True
+                if st.button("📦 Collect All", use_container_width=True):
+                    with st.spinner("Marking inventory as collected..."):
+                        st.session_state.modules_db[module_name]["bom"]["Collected"] = True
                         save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with bulk_col2:
-                if st.button("❌ Uncheck All", use_container_width=True):
-                    with st.spinner("Unchecking all items..."):
+                if st.button("📦 Uncollect All", use_container_width=True):
+                    with st.spinner("Unmarking inventory..."):
+                        st.session_state.modules_db[module_name]["bom"]["Collected"] = False
+                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+            with bulk_col3:
+                if st.button("✅ Complete All", use_container_width=True):
+                    with st.spinner("Checking all assemblies..."):
+                        st.session_state.modules_db[module_name]["bom"]["Completed"] = True
+                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+            with bulk_col4:
+                if st.button("❌ Uncomplete All", use_container_width=True):
+                    with st.spinner("Unchecking all assemblies..."):
                         st.session_state.modules_db[module_name]["bom"]["Completed"] = False
                         save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
@@ -278,7 +303,8 @@ if check_password():
                     hide_index=True,
                     use_container_width=True,
                     column_config={
-                        "Completed": st.column_config.CheckboxColumn("Done?", default=False),
+                        "Collected": st.column_config.CheckboxColumn("Collected?", default=False),
+                        "Completed": st.column_config.CheckboxColumn("Assembled?", default=False),
                         "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
                         "UIN": st.column_config.TextColumn("UIN", disabled=True),
                         "Quantity": st.column_config.TextColumn("Qty", disabled=True),
@@ -307,25 +333,32 @@ if check_password():
                 with st.expander("📈 View Overall Progress", expanded=True):
                     chart_data = []
                     total_global_items = 0
+                    total_global_collected = 0
                     total_global_completed = 0
                     
                     for name, data in st.session_state.modules_db.items():
                         df_mod = data["bom"]
                         tot = len(df_mod)
+                        col = df_mod["Collected"].sum()
                         comp = df_mod["Completed"].sum()
+                        col_pct = int((col / tot) * 100) if tot > 0 else 0
                         pct = int((comp / tot) * 100) if tot > 0 else 0
-                        chart_data.append({"Module": name, "Completion %": pct})
+                        chart_data.append({"Module": name, "Collected %": col_pct, "Completed %": pct})
                         total_global_items += tot
+                        total_global_collected += col
                         total_global_completed += comp
                         
+                    global_col_pct = int((total_global_collected / total_global_items) * 100) if total_global_items > 0 else 0
                     global_pct = int((total_global_completed / total_global_items) * 100) if total_global_items > 0 else 0
                     
-                    prog_col1, prog_col2 = st.columns([1, 3])
+                    prog_col1, prog_col2, prog_col3 = st.columns([1, 1, 3])
                     with prog_col1:
-                        st.metric("Overall Completion", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Total Items")
+                        st.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
                     with prog_col2:
+                        st.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
+                    with prog_col3:
                         chart_df = pd.DataFrame(chart_data).set_index("Module")
-                        st.bar_chart(chart_df, y="Completion %")
+                        st.bar_chart(chart_df, y=["Collected %", "Completed %"])
 
                 st.divider()
                 
@@ -342,9 +375,11 @@ if check_password():
                     if search_term.lower() in name.lower():
                         df_mod = data["bom"]
                         tot = len(df_mod)
+                        col = df_mod["Collected"].sum()
                         comp = df_mod["Completed"].sum()
+                        col_pct = int((col / tot) * 100) if tot > 0 else 0
                         pct = int((comp / tot) * 100) if tot > 0 else 0
-                        module_items.append({"name": name, "data": data, "pct": pct, "tot": tot, "comp": comp})
+                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pct": pct, "tot": tot, "comp": comp})
                 
                 # Apply Sorting
                 if sort_order == "Name (A-Z)":
@@ -370,8 +405,12 @@ if check_password():
                                 with cols[j]:
                                     with st.container(border=True):
                                         st.subheader(f"📦 {module_name}")
+                                        
+                                        st.caption(f"📦 Inventory Collected ({mod_dict['col_pct']}%)")
+                                        st.progress(mod_dict["col_pct"] / 100.0)
+                                        
+                                        st.caption(f"🛠️ Assembly Completed ({mod_dict['pct']}%)")
                                         st.progress(mod_dict["pct"] / 100.0)
-                                        st.metric("Completion Status", f"{mod_dict['pct']}%", f"{mod_dict['comp']} / {mod_dict['tot']} Items")
                                         
                                         if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
                                             st.session_state.selected_module = module_name
