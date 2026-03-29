@@ -8,7 +8,7 @@ import json
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Assembly Extractor", layout="wide")
+st.set_page_config(page_title="Prekited Extractor", layout="wide")
 
 # ==========================================
 # DATABASE LOGIC (Google Sheets)
@@ -208,7 +208,7 @@ if check_password():
     # PAGE 1: UPLOAD NEW MODULE
     # ==========================================
     if page == "Upload New Module":
-        st.title("📤 Upload Amazon Assembly Module")
+        st.title("📤 Upload Amazon Prekited Module")
         st.write("Upload one or more PDFs to extract their Bill of Materials and save them to your dashboard.")
         
         uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
@@ -293,7 +293,7 @@ if check_password():
             with col2:
                 st.metric("Collected", f"{collected_pct}%", f"{collected_items} / {total_items}")
             with col3:
-                st.write("**🛠️ Assembly Completed**")
+                st.write("**🛠️ Prekited Completed**")
                 st.progress(progress_percentage / 100.0)
             with col4:
                 st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
@@ -321,13 +321,13 @@ if check_password():
                     st.rerun()
             with bulk_col3:
                 if st.button("✅ Complete All", use_container_width=True):
-                    with st.spinner("Checking all assemblies..."):
+                    with st.spinner("Checking all prekited items..."):
                         st.session_state.modules_db[module_name]["bom"]["Completed"] = True
                         save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
             with bulk_col4:
                 if st.button("❌ Uncomplete All", use_container_width=True):
-                    with st.spinner("Unchecking all assemblies..."):
+                    with st.spinner("Unchecking all prekited items..."):
                         st.session_state.modules_db[module_name]["bom"]["Completed"] = False
                         save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
@@ -340,7 +340,7 @@ if check_password():
                     use_container_width=True,
                     column_config={
                         "Collected": st.column_config.CheckboxColumn("Collected?", default=False),
-                        "Completed": st.column_config.CheckboxColumn("Assembled?", default=False),
+                        "Completed": st.column_config.CheckboxColumn("Prekited?", default=False),
                         "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
                         "UIN": st.column_config.TextColumn("UIN", disabled=True),
                         "Quantity": st.column_config.TextColumn("Qty", disabled=True),
@@ -392,7 +392,7 @@ if check_password():
                     with prog_col1:
                         st.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
                     with prog_col2:
-                        st.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
+                        st.metric("Overall Prekited", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
                     with prog_col3:
                         chart_df = pd.DataFrame(chart_data).set_index("Module")
                         st.bar_chart(chart_df, y=["Collected %", "Completed %"])
@@ -446,7 +446,7 @@ if check_password():
                                         st.caption(f"📦 Inventory Collected ({mod_dict['col_pct']}%)")
                                         st.progress(mod_dict["col_pct"] / 100.0)
                                         
-                                        st.caption(f"🛠️ Assembly Completed ({mod_dict['pct']}%)")
+                                        st.caption(f"🛠️ Prekited Completed ({mod_dict['pct']}%)")
                                         st.progress(mod_dict["pct"] / 100.0)
                                         
                                         if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
