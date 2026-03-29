@@ -8,7 +8,7 @@ import json
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Prekited Extractor", layout="wide")
+st.set_page_config(page_title="Assembly Extractor", layout="wide")
 
 # ==========================================
 # DATABASE LOGIC (Google Sheets)
@@ -30,6 +30,8 @@ def load_all_modules_from_gsheets():
                     # Gracefully handle legacy data by injecting the new column if it's missing
                     if "Collected" not in bom_df.columns:
                         bom_df.insert(0, "Collected", False)
+                    if "Prekited" not in bom_df.columns:
+                        bom_df.insert(1, "Prekited", False)
                     if "Notes" not in bom_df.columns:
                         bom_df["Notes"] = ""
                     loaded_modules[name] = {"bom": bom_df}
@@ -145,6 +147,7 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
                         if match:
                             all_bom_data.append({
                                 "Collected": False, # New column for Inventory
+                                "Prekited": False, # New column for Prekit
                                 "Completed": False, # Checkbox column defaults to False
                                 "BOM_ID": match.group(1),
                                 "UIN": match.group(2),
@@ -185,6 +188,8 @@ if check_password():
         if "bom" in data:
             if "Collected" not in data["bom"].columns:
                 data["bom"].insert(0, "Collected", False)
+            if "Prekited" not in data["bom"].columns:
+                data["bom"].insert(1, "Prekited", False)
             if "Notes" not in data["bom"].columns:
                 data["bom"]["Notes"] = ""
 
@@ -208,7 +213,7 @@ if check_password():
     # PAGE 1: UPLOAD NEW MODULE
     # ==========================================
     if page == "Upload New Module":
-        st.title("📤 Upload Amazon Prekited Module")
+        st.title("📤 Upload Amazon Assembly Module")
         st.write("Upload one or more PDFs to extract their Bill of Materials and save them to your dashboard.")
         
         uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
@@ -281,22 +286,23 @@ if check_password():
             # --- Progress Calculation & Display ---
             total_items = len(df)
             collected_items = df["Collected"].sum()
+            prekited_items = df["Prekited"].sum()
             completed_items = df["Completed"].sum()
             
             collected_pct = int((collected_items / total_items) * 100) if total_items > 0 else 0
+            prekited_pct = int((prekited_items / total_items) * 100) if total_items > 0 else 0
             progress_percentage = int((completed_items / total_items) * 100) if total_items > 0 else 0
             
-            col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.write("**📦 Inventory Collected**")
+                st.metric("📦 Collected", f"{collected_pct}%", f"{collected_items} / {total_items}")
                 st.progress(collected_pct / 100.0)
             with col2:
-                st.metric("Collected", f"{collected_pct}%", f"{collected_items} / {total_items}")
+                st.metric("🔄 Prekited", f"{prekited_pct}%", f"{prekited_items} / {total_items}")
+                st.progress(prekited_pct / 100.0)
             with col3:
-                st.write("**🛠️ Prekited Completed**")
+                st.metric("🛠️ Assembled", f"{progress_percentage}%", f"{completed_items} / {total_items}")
                 st.progress(progress_percentage / 100.0)
-            with col4:
-                st.metric("Completion Status", f"{progress_percentage}%", f"{completed_items} / {total_items} Items")
             
             if progress_percentage == 100:
                 st.success("Module Complete! 🎉")
@@ -306,30 +312,36 @@ if check_password():
             st.subheader("📝 Bill of Materials Checklist")
             
             # --- Bulk Actions ---
-            bulk_col1, bulk_col2, bulk_col3, bulk_col4 = st.columns(4)
-            with bulk_col1:
+            b_col1, b_col2, b_col3, b_col4, b_col5, b_col6 = st.columns(6)
+            with b_col1:
                 if st.button("📦 Collect All", use_container_width=True):
-                    with st.spinner("Marking inventory as collected..."):
-                        st.session_state.modules_db[module_name]["bom"]["Collected"] = True
-                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.session_state.modules_db[module_name]["bom"]["Collected"] = True
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
-            with bulk_col2:
+            with b_col2:
+                if st.button("🔄 Prekit All", use_container_width=True):
+                    st.session_state.modules_db[module_name]["bom"]["Prekited"] = True
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+            with b_col3:
+                if st.button("✅ Assemble All", use_container_width=True):
+                    st.session_state.modules_db[module_name]["bom"]["Completed"] = True
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.rerun()
+            with b_col4:
                 if st.button("📦 Uncollect All", use_container_width=True):
-                    with st.spinner("Unmarking inventory..."):
-                        st.session_state.modules_db[module_name]["bom"]["Collected"] = False
-                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+                    st.session_state.modules_db[module_name]["bom"]["Collected"] = False
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
-            with bulk_col3:
-                if st.button("✅ Complete All", use_container_width=True):
-                    with st.spinner("Checking all prekited items..."):
-                        st.session_state.modules_db[module_name]["bom"]["Completed"] = True
-                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+            with b_col5:
+                if st.button("🔄 Unprekit All", use_container_width=True):
+                    st.session_state.modules_db[module_name]["bom"]["Prekited"] = False
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
-            with bulk_col4:
-                if st.button("❌ Uncomplete All", use_container_width=True):
-                    with st.spinner("Unchecking all prekited items..."):
-                        st.session_state.modules_db[module_name]["bom"]["Completed"] = False
-                        save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
+            with b_col6:
+                if st.button("❌ Unassemble All", use_container_width=True):
+                    st.session_state.modules_db[module_name]["bom"]["Completed"] = False
+                    save_module_to_gsheets(module_name, st.session_state.modules_db[module_name]["bom"])
                     st.rerun()
 
             # --- Interactive Form ---
@@ -340,7 +352,8 @@ if check_password():
                     use_container_width=True,
                     column_config={
                         "Collected": st.column_config.CheckboxColumn("Collected?", default=False),
-                        "Completed": st.column_config.CheckboxColumn("Prekited?", default=False),
+                        "Prekited": st.column_config.CheckboxColumn("Prekited?", default=False),
+                        "Completed": st.column_config.CheckboxColumn("Assembled?", default=False),
                         "BOM_ID": st.column_config.TextColumn("BOM ID", disabled=True),
                         "UIN": st.column_config.TextColumn("UIN", disabled=True),
                         "Quantity": st.column_config.TextColumn("Qty", disabled=True),
@@ -371,31 +384,38 @@ if check_password():
                     chart_data = []
                     total_global_items = 0
                     total_global_collected = 0
+                    total_global_prekited = 0
                     total_global_completed = 0
                     
                     for name, data in st.session_state.modules_db.items():
                         df_mod = data["bom"]
                         tot = len(df_mod)
                         col = df_mod["Collected"].sum()
+                        pre = df_mod["Prekited"].sum()
                         comp = df_mod["Completed"].sum()
                         col_pct = int((col / tot) * 100) if tot > 0 else 0
+                        pre_pct = int((pre / tot) * 100) if tot > 0 else 0
                         pct = int((comp / tot) * 100) if tot > 0 else 0
-                        chart_data.append({"Module": name, "Collected %": col_pct, "Completed %": pct})
+                        chart_data.append({"Module": name, "Collected %": col_pct, "Prekited %": pre_pct, "Completed %": pct})
                         total_global_items += tot
                         total_global_collected += col
+                        total_global_prekited += pre
                         total_global_completed += comp
                         
                     global_col_pct = int((total_global_collected / total_global_items) * 100) if total_global_items > 0 else 0
+                    global_pre_pct = int((total_global_prekited / total_global_items) * 100) if total_global_items > 0 else 0
                     global_pct = int((total_global_completed / total_global_items) * 100) if total_global_items > 0 else 0
                     
-                    prog_col1, prog_col2, prog_col3 = st.columns([1, 1, 3])
+                    prog_col1, prog_col2, prog_col3 = st.columns(3)
                     with prog_col1:
                         st.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
                     with prog_col2:
-                        st.metric("Overall Prekited", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
+                        st.metric("Overall Prekited", f"{global_pre_pct}%", f"{total_global_prekited} / {total_global_items} Items")
                     with prog_col3:
-                        chart_df = pd.DataFrame(chart_data).set_index("Module")
-                        st.bar_chart(chart_df, y=["Collected %", "Completed %"])
+                        st.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
+                        
+                    chart_df = pd.DataFrame(chart_data).set_index("Module")
+                    st.bar_chart(chart_df, y=["Collected %", "Prekited %", "Completed %"])
 
                 st.divider()
                 
@@ -413,10 +433,12 @@ if check_password():
                         df_mod = data["bom"]
                         tot = len(df_mod)
                         col = df_mod["Collected"].sum()
+                        pre = df_mod["Prekited"].sum()
                         comp = df_mod["Completed"].sum()
                         col_pct = int((col / tot) * 100) if tot > 0 else 0
+                        pre_pct = int((pre / tot) * 100) if tot > 0 else 0
                         pct = int((comp / tot) * 100) if tot > 0 else 0
-                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pct": pct, "tot": tot, "comp": comp})
+                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "tot": tot, "comp": comp})
                 
                 # Apply Sorting
                 if sort_order == "Name (A-Z)":
@@ -443,10 +465,13 @@ if check_password():
                                     with st.container(border=True):
                                         st.subheader(f"📦 {module_name}")
                                         
-                                        st.caption(f"📦 Inventory Collected ({mod_dict['col_pct']}%)")
+                                        st.caption(f"📦 Collected ({mod_dict['col_pct']}%)")
                                         st.progress(mod_dict["col_pct"] / 100.0)
                                         
-                                        st.caption(f"🛠️ Prekited Completed ({mod_dict['pct']}%)")
+                                        st.caption(f"🔄 Prekited ({mod_dict['pre_pct']}%)")
+                                        st.progress(mod_dict["pre_pct"] / 100.0)
+                                        
+                                        st.caption(f"🛠️ Assembled ({mod_dict['pct']}%)")
                                         st.progress(mod_dict["pct"] / 100.0)
                                         
                                         if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
