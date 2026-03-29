@@ -350,9 +350,21 @@ if check_password():
                     st.rerun()
 
             # --- Interactive Form ---
+            def highlight_rows(row):
+                # 1. Highlight rows with issues/notes in light red
+                if pd.notna(row.get('Notes')) and str(row.get('Notes')).strip() != "":
+                    return ['background-color: rgba(255, 75, 75, 0.3)'] * len(row)
+                # 2. Highlight fully completed rows in light green
+                elif row.get('Completed'):
+                    return ['background-color: rgba(46, 204, 113, 0.3)'] * len(row)
+                # 3. Default color for everything else
+                return [''] * len(row)
+                
+            styled_df = df.style.apply(highlight_rows, axis=1)
+
             with st.form(key=f"form_{module_name}"):
                 edited_df = st.data_editor(
-                    df,
+                    styled_df,
                     hide_index=True,
                     use_container_width=True,
                     column_config={
