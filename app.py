@@ -3,6 +3,7 @@ import pdfplumber
 import pandas as pd
 import io
 import re
+import os
 
 # --- Page Configuration ---
 # MUST be the first Streamlit command!
@@ -33,52 +34,57 @@ def check_password():
         return True
 
 # --- Helper Function: Extract Data from PDF ---
-def process_pdf(pdf_bytes):
+def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
+    """Extracts BOM data from PDF bytes and returns it as a Pandas DataFrame."""
     all_bom_data = []
     
     # Extract BOM
     row_pattern = re.compile(r'^(\d+)\s+([^\s]+)\s+([\d\.,]+)\s+(.+)$')
     in_bom_section = False
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if not text:
-                continue
-
-            lines = text.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
                     continue
-
-                if "BOM_ID" in line.upper() and "UIN" in line.upper() and "QUANTITY" in line.upper():
-                    in_bom_section = True
-                    continue
-
-                if in_bom_section:
-                    match = row_pattern.match(line)
-                    if match:
-                        all_bom_data.append({
-                            "Completed": False, # Checkbox column defaults to False
-                            "BOM_ID": match.group(1),
-                            "UIN": match.group(2),
-                            "Quantity": match.group(3),
-                            "Description": match.group(4)
-                        })
-                    elif all_bom_data:
-                        # Stop rules and text wrapping
-                        if re.match(r'^Page\s+\d+', line, re.IGNORECASE) or (line.isdigit() and len(line) < 4):
-                            continue
-                        if re.match(r'^(Step\s+\d+|\d+\.\d+\s+[A-Z])', line, re.IGNORECASE):
-                            in_bom_section = False
-                            continue
-                        if line.upper().startswith("NOTES:") or line.upper().startswith("TOTAL"):
-                            in_bom_section = False
-                            continue
-                        if len(all_bom_data[-1]["Description"]) < 400:
-                            all_bom_data[-1]["Description"] += " " + line
-
+    
+                lines = text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+    
+                    if "BOM_ID" in line.upper() and "UIN" in line.upper() and "QUANTITY" in line.upper():
+                        in_bom_section = True
+                        continue
+    
+                    if in_bom_section:
+                        match = row_pattern.match(line)
+                        if match:
+                            all_bom_data.append({
+                                "Completed": False, # Checkbox column defaults to False
+                                "BOM_ID": match.group(1),
+                                "UIN": match.group(2),
+                                "Quantity": match.group(3),
+                                "Description": match.group(4)
+                            })
+                        elif all_bom_data:
+                            # Stop rules and text wrapping
+                            if re.match(r'^Page\s+\d+', line, re.IGNORECASE) or (line.isdigit() and len(line) < 4):
+                                continue
+                            if re.match(r'^(Step\s+\d+|\d+\.\d+\s+[A-Z])', line, re.IGNORECASE):
+                                in_bom_section = False
+                                continue
+                            if line.upper().startswith("NOTES:") or line.upper().startswith("TOTAL"):
+                                in_bom_section = False
+                                continue
+                            if len(all_bom_data[-1]["Description"]) < 400:
+                                all_bom_data[-1]["Description"] += " " + line
+    except Exception as e:
+        st.error(f"An error occurred while reading the PDF: {e}")
+        return pd.DataFrame() # Return empty dataframe on failure
+        
     return pd.DataFrame(all_bom_data)
 
 
@@ -110,7 +116,7 @@ if check_password():
         uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
         if uploaded_file is not None:
-            module_name = uploaded_file.name.replace('.pdf', '')
+            module_name = os.path.splitext(uploaded_file.name)[0]
             
             if module_name in st.session_state.modules_db:
                 st.warning(f"Module '{module_name}' is already in your Dashboard!")
