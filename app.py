@@ -34,6 +34,8 @@ def load_all_modules_from_gsheets():
                         bom_df.insert(1, "Prekited", False)
                     if "Notes" not in bom_df.columns:
                         bom_df["Notes"] = ""
+                    if "UIN" in bom_df.columns:
+                        bom_df = bom_df.sort_values(by="UIN", ascending=False).reset_index(drop=True)
                     loaded_modules[name] = {"bom": bom_df}
         return loaded_modules
     except Exception as e:
@@ -171,7 +173,10 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
         st.error(f"An error occurred while reading the PDF: {e}")
         return pd.DataFrame() # Return empty dataframe on failure
         
-    return pd.DataFrame(all_bom_data)
+    df = pd.DataFrame(all_bom_data)
+    if not df.empty and "UIN" in df.columns:
+        df = df.sort_values(by="UIN", ascending=False).reset_index(drop=True)
+    return df
 
 # ==========================================
 # MAIN APP LOGIC (Protected by Password)
@@ -192,6 +197,8 @@ if check_password():
                 data["bom"].insert(1, "Prekited", False)
             if "Notes" not in data["bom"].columns:
                 data["bom"]["Notes"] = ""
+            if "UIN" in data["bom"].columns:
+                data["bom"] = data["bom"].sort_values(by="UIN", ascending=False).reset_index(drop=True)
 
     # --- Top Navigation ---
     top_col1, top_col2, top_col3 = st.columns([2, 6, 2])
