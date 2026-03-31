@@ -9,7 +9,7 @@ import datetime
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Assembly Extractor", layout="wide")
+st.set_page_config(page_title="NPSG Module Assembly Tool", layout="wide")
 
 # ==========================================
 # DATABASE LOGIC (Google Sheets)
@@ -205,6 +205,10 @@ if check_password():
             if "UIN" in data["bom"].columns:
                 data["bom"] = data["bom"].sort_values(by="UIN", ascending=True).reset_index(drop=True)
 
+    # --- App Header ---
+    st.title("🏗️ NPSG Module Assembly Tool")
+    st.write("") # Slight spacing
+
     # --- Top Navigation ---
     top_col1, top_col2, top_col3 = st.columns([2, 6, 2])
     with top_col1:
@@ -226,7 +230,7 @@ if check_password():
     # PAGE 1: UPLOAD NEW MODULE
     # ==========================================
     if page == "Upload New Module":
-        st.title("📤 Upload Amazon Assembly Module")
+        st.header("📤 Upload New Module")
         st.write("Upload one or more PDFs to extract their Bill of Materials and save them to your dashboard.")
         
         uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
@@ -293,7 +297,7 @@ if check_password():
                             st.session_state.selected_module = None
                             st.rerun()
 
-            st.title(f"📦 Module: {module_name}")
+            st.header(f"📦 Module: {module_name}")
             st.divider()
 
             # --- Progress Calculation & Display ---
@@ -416,7 +420,7 @@ if check_password():
 
         # --- MASTER VIEW (GRID) ---
         else:
-            st.title("📊 Module Dashboard")
+            st.header("📊 Module Dashboard")
             if not st.session_state.modules_db:
                 st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
             else:
