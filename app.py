@@ -520,7 +520,7 @@ if check_password():
                             prog_col1.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
                             prog_col2.metric("Overall Prekited", f"{global_pre_pct}%", f"{total_global_prekited} / {total_global_items} Items")
                             prog_col3.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
-                            st.bar_chart(pd.DataFrame(chart_data).set_index("Module"), y=["Collected %", "Prekited %", "Completed %"])
+                            st.bar_chart(pd.DataFrame(chart_data).set_index("Module"), y=["Collected %", "Prekited %", "Completed %"], stack=False)
 
                         # --- Global Issues Tracker ---
                         with st.expander("🚨 Global Issues & Bottlenecks", expanded=False):
@@ -568,10 +568,26 @@ if check_password():
                                         with st.container(border=True):
                                             st.subheader(f"📦 {mod_dict['name']}")
                                             st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
-                                            m_col1, m_col2, m_col3 = st.columns(3)
-                                            m_col1.metric(label="Collected", value=f"{mod_dict['col_pct']}%")
-                                            m_col2.metric(label="Prekited", value=f"{mod_dict['pre_pct']}%")
-                                            m_col3.metric(label="Assembled", value=f"{mod_dict['pct']}%")
+                                            
+                                            # Use HTML flexbox to force columns and prevent Streamlit from collapsing them into rows
+                                            metrics_html = f"""
+                                            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                                                <div style="flex: 1; background-color: rgba(150, 150, 150, 0.1); padding: 8px; border-radius: 8px; text-align: center;">
+                                                    <div style="font-size: 0.8rem; margin-bottom: 4px; opacity: 0.8;">Collected</div>
+                                                    <div style="font-size: 1.2rem; font-weight: bold;">{mod_dict['col_pct']}%</div>
+                                                </div>
+                                                <div style="flex: 1; background-color: rgba(150, 150, 150, 0.1); padding: 8px; border-radius: 8px; text-align: center;">
+                                                    <div style="font-size: 0.8rem; margin-bottom: 4px; opacity: 0.8;">Prekited</div>
+                                                    <div style="font-size: 1.2rem; font-weight: bold;">{mod_dict['pre_pct']}%</div>
+                                                </div>
+                                                <div style="flex: 1; background-color: rgba(150, 150, 150, 0.1); padding: 8px; border-radius: 8px; text-align: center;">
+                                                    <div style="font-size: 0.8rem; margin-bottom: 4px; opacity: 0.8;">Assembled</div>
+                                                    <div style="font-size: 1.2rem; font-weight: bold;">{mod_dict['pct']}%</div>
+                                                </div>
+                                            </div>
+                                            """
+                                            st.markdown(metrics_html, unsafe_allow_html=True)
+                                            
                                             if st.button("View Checklist", key=f"view_{mod_dict['name']}", use_container_width=True):
                                                 st.session_state.selected_module = mod_dict['name']
                                                 st.rerun()
