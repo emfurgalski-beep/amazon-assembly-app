@@ -209,6 +209,33 @@ def process_pdf(pdf_bytes: bytes) -> pd.DataFrame:
 # MAIN APP LOGIC (Protected by Password)
 # ==========================================
 if check_password():
+    # --- Custom CSS for a more professional layout ---
+    st.markdown("""
+        <style>
+            /* Target bordered containers (Module Cards) regardless of Light/Dark theme */
+            div[data-testid="stVerticalBlockBorderWrapper"] {
+                border-radius: 10px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease-in-out;
+            }
+            /* Add hover "pop" effect */
+            div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+                border-color: #FF4B4B;
+            }
+            /* Style metrics to look like mini KPI badges */
+            div[data-testid="stMetric"] {
+                background-color: rgba(150, 150, 150, 0.1);
+                padding: 10px;
+                border-radius: 8px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
     # --- Initialize session state from Google Sheets ---
     if 'modules_db' not in st.session_state:
         st.session_state.modules_db = load_all_modules_from_gsheets()
@@ -540,10 +567,10 @@ if check_password():
                                         with st.container(border=True):
                                             st.subheader(f"📦 {mod_dict['name']}")
                                             st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
-                                            p_col1, p_col2, p_col3 = st.columns(3)
-                                            p_col1.caption("📦 Collected"); p_col1.progress(mod_dict["col_pct"] / 100.0)
-                                            p_col2.caption("🔄 Prekited"); p_col2.progress(mod_dict["pre_pct"] / 100.0)
-                                            p_col3.caption("🛠️ Assembled"); p_col3.progress(mod_dict["pct"] / 100.0)
+                                            m_col1, m_col2, m_col3 = st.columns(3)
+                                            m_col1.metric(label="Collected", value=f"{mod_dict['col_pct']}%")
+                                            m_col2.metric(label="Prekited", value=f"{mod_dict['pre_pct']}%")
+                                            m_col3.metric(label="Assembled", value=f"{mod_dict['pct']}%")
                                             if st.button("View Checklist", key=f"view_{mod_dict['name']}", use_container_width=True):
                                                 st.session_state.selected_module = mod_dict['name']
                                                 st.rerun()
