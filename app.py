@@ -39,7 +39,11 @@ def load_all_modules_from_gsheets():
                         bom_df = bom_df.sort_values(by="UIN", ascending=True).reset_index(drop=True)
                     last_updated = row["Last_Updated"] if "Last_Updated" in df.columns else "Unknown"
                     is_archived = row["Archived"] if "Archived" in df.columns and pd.notna(row["Archived"]) else False
-                    loaded_modules[name] = {"bom": bom_df, "last_updated": last_updated, "archived": is_archived}
+                    due_date = pd.to_datetime(row["DueDate"]).date() if "DueDate" in df.columns and pd.notna(row["DueDate"]) else None
+                    is_priority = row["IsPriority"] if "IsPriority" in df.columns and pd.notna(row["IsPriority"]) else False
+                    
+                    loaded_modules[name] = {"bom": bom_df, "last_updated": last_updated, "archived": is_archived, 
+                                            "due_date": due_date, "is_priority": is_priority}
         return loaded_modules
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets. Check your secrets! Error: {e}")
@@ -54,14 +58,22 @@ def save_module_to_gsheets(module_name, bom_df):
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         bom_json = bom_df.to_json(orient="records")
 
-        is_archived = False # Default for new or un-archived modules
+        # Preserve existing metadata when saving
+        is_archived, due_date, is_priority = False, None, False
         if not df.empty and "Module_Name" in df.columns:
             old_row = df[df["Module_Name"] == module_name]
-            if not old_row.empty and "Archived" in old_row.columns:
-                is_archived = old_row["Archived"].iloc[0] if pd.notna(old_row["Archived"].iloc[0]) else False
+            if not old_row.empty:
+                if "Archived" in old_row.columns:
+                    is_archived = old_row["Archived"].iloc[0] if pd.notna(old_row["Archived"].iloc[0]) else False
+                if "DueDate" in old_row.columns:
+                    due_date = old_row["DueDate"].iloc[0] if pd.notna(old_row["DueDate"].iloc[0]) else None
+                if "IsPriority" in old_row.columns:
+                    is_priority = old_row["IsPriority"].iloc[0] if pd.notna(old_row["IsPriority"].iloc[0]) else False
 
-        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json, "Last_Updated": current_time, "Archived": is_archived}])
-        
+        new_row_data = {"Module_Name": module_name, "BOM_JSON": bom_json, "Last_Updated": current_time, 
+                        "Archived": is_archived, "DueDate": due_date, "IsPriority": is_priority}
+        new_row = pd.DataFrame([new_row_data])
+
         if not df.empty and "Module_Name" in df.columns:
             # Remove the old row for this module, if it exists
             df = df[df["Module_Name"] != module_name]
@@ -91,6 +103,27 @@ def set_archive_status_in_gsheets(module_name, is_archived):
                 st.cache_data.clear()
     except Exception as e:
         st.error(f"Failed to update archive status in Google Sheets. Error: {e}")
+
+def update_module_metadata_in_gsheets(module_name, due_date=None, is_priority=None):
+    """Updates metadata for a specific module in Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        if not df.empty and "Module_Name" in df.columns:
+            module_index = df.index[df["Module_Name"] == module_name].tolist()
+            if module_index:
+                idx = module_index[0]
+                if due_date is not None:
+                    if "DueDate" not in df.columns: df["DueDate"] = None
+                    df.loc[idx, "DueDate"] = due_date.strftime('%Y-%m-%d') if due_date else None
+                if is_priority is not None:
+                    if "IsPriority" not in df.columns: df["IsPriority"] = False
+                    df.loc[idx, "IsPriority"] = is_priority
+                conn.update(worksheet="Sheet1", data=df)
+                st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to update metadata in Google Sheets. Error: {e}")
 
 def delete_module_from_gsheets(module_name):
     """Delete a module from Google Sheets."""
@@ -241,13 +274,16 @@ if check_password():
         st.session_state.modules_db = load_all_modules_from_gsheets()
     if 'selected_module' not in st.session_state:
         st.session_state.selected_module = None
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 0
         
     # --- Hot-Reload Patch for Legacy Sessions ---
     for name, data in st.session_state.modules_db.items():
-        if "last_updated" not in data:
-            data["last_updated"] = "Unknown"
-        if "archived" not in data:
-            data["archived"] = False
+        data.setdefault("last_updated", "Unknown")
+        data.setdefault("archived", False)
+        data.setdefault("due_date", None)
+        data.setdefault("is_priority", False)
+
         if "bom" in data:
             if "Collected" not in data["bom"].columns:
                 data["bom"].insert(0, "Collected", False)
@@ -288,6 +324,14 @@ if check_password():
         
         uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
         
+        # --- Admin controls for new modules ---
+        due_date, is_priority = None, False
+        if st.session_state.get("user_role") == "Admin":
+            st.write("---")
+            st.write("**Project Management (Admin Only)**")
+            due_date = st.date_input("Set Due Date (Optional)")
+            is_priority = st.toggle("Mark as High Priority", value=False)
+
         if uploaded_files:
             success_count = 0
             for uploaded_file in uploaded_files:
@@ -302,9 +346,14 @@ if check_password():
                         
                         if not bom_df.empty:
                             # Update local memory
-                            st.session_state.modules_db[module_name] = {"bom": bom_df, "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "archived": False}
+                            st.session_state.modules_db[module_name] = {
+                                "bom": bom_df, "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                "archived": False, "due_date": due_date, "is_priority": is_priority
+                            }
                             # Push to Google Sheets
                             save_module_to_gsheets(module_name, bom_df)
+                            if due_date or is_priority: # Update metadata if set
+                                update_module_metadata_in_gsheets(module_name, due_date, is_priority)
                             
                             st.success(f"Successfully processed and saved '{module_name}'!")
                             success_count += 1
@@ -350,7 +399,13 @@ if check_password():
                             st.session_state.selected_module = None
                             st.rerun()
 
-            st.header(f"📦 Module: {module_name}")
+            # --- Module Header with Priority & Due Date ---
+            header_text = "📦 Module: "
+            if module_data.get("is_priority"):
+                header_text += "🚨 "
+            header_text += module_name
+            st.header(header_text)
+            st.caption(f"Due Date: {module_data.get('due_date', 'Not set')}")
             st.divider()
 
             # --- Progress Calculation & Display ---
@@ -388,6 +443,22 @@ if check_password():
                         if st.button("⤴️ Unarchive Module", use_container_width=True):
                             set_archive_status_in_gsheets(module_name, False)
                             st.session_state.modules_db[module_name]["archived"] = False
+                            st.rerun()
+
+            # --- Admin Metadata Editor ---
+            if st.session_state.get("user_role") == "Admin":
+                with st.expander("⚙️ Edit Project Details (Admin)"):
+                    new_due_date = st.date_input("Due Date", value=module_data.get("due_date"), key=f"due_{module_name}")
+                    new_is_priority = st.toggle("High Priority", value=module_data.get("is_priority", False), key=f"pri_{module_name}")
+                    
+                    if st.button("Save Project Details", key=f"save_meta_{module_name}"):
+                        # Check if values have changed before saving
+                        if new_due_date != module_data.get("due_date") or new_is_priority != module_data.get("is_priority"):
+                            with st.spinner("Updating metadata..."):
+                                update_module_metadata_in_gsheets(module_name, new_due_date, new_is_priority)
+                                st.session_state.modules_db[module_name]['due_date'] = new_due_date
+                                st.session_state.modules_db[module_name]['is_priority'] = new_is_priority
+                            st.success("Project details updated!")
                             st.rerun()
 
             st.subheader("📝 Bill of Materials Checklist")
@@ -531,6 +602,25 @@ if check_password():
                                 st.success("No issues or notes logged across any active modules! 🎉")
 
                         st.divider()
+
+                        # --- Master Report Export ---
+                        with st.expander("📊 Download Master Report"):
+                            st.write("Generate a CSV report of the current status of all active modules.")
+                            report_data = []
+                            for name, data in active_modules.items():
+                                df_mod, tot = data["bom"], len(data["bom"])
+                                col, pre, comp = df_mod["Collected"].sum(), df_mod["Prekited"].sum(), df_mod["Completed"].sum()
+                                num_issues = len(df_mod[df_mod["Notes"].fillna("").astype(str).str.strip() != ""])
+                                report_data.append({
+                                    "Module Name": name, "Collected %": int((col/tot)*100 if tot>0 else 0),
+                                    "Prekited %": int((pre/tot)*100 if tot>0 else 0), "Assembled %": int((comp/tot)*100 if tot>0 else 0),
+                                    "Open Issues": num_issues, "Last Updated": data.get("last_updated", "Unknown"),
+                                    "Due Date": data.get("due_date"), "High Priority": data.get("is_priority", False)
+                                })
+                            if report_data:
+                                report_df = pd.DataFrame(report_data)
+                                report_csv = report_df.to_csv(index=False).encode('utf-8')
+                                st.download_button("📥 Download Report", data=report_csv, file_name="NPSG_Master_Report.csv", mime="text/csv")
                         
                         # --- Smart Quick Filters ---
                         quick_filter = st.radio("🎯 Smart Quick-Filters", ["All Modules", "📦 Needs Collecting", "🔄 Ready for Prekit", "🛠️ Ready for Assembly"], horizontal=True, key="active_quick_filter")
@@ -538,7 +628,8 @@ if check_password():
                         # --- Search and Sort Controls ---
                         ctrl_col1, ctrl_col2 = st.columns([3, 1])
                         search_term = ctrl_col1.text_input("🔍 Search Modules", placeholder="Type to filter by module name...")
-                        sort_order = ctrl_col2.selectbox("↕️ Sort By", ["Name (A-Z)", "Name (Z-A)", "Completion (High - Low)", "Completion (Low - High)"])
+                        sort_order = ctrl_col2.selectbox("↕️ Sort By", ["Priority", "Due Date (Soonest First)", "Name (A-Z)", "Name (Z-A)", 
+                                                                      "Completion (High - Low)", "Completion (Low - High)"])
                         
                         # Prepare filtered and calculated list
                         module_items = []
@@ -551,22 +642,48 @@ if check_password():
                                    (quick_filter == "🔄 Ready for Prekit" and (col_pct < 100 or pre_pct >= 100)) or \
                                    (quick_filter == "🛠️ Ready for Assembly" and (pre_pct < 100 or pct >= 100)):
                                     continue
-                                module_items.append({"name": name, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "last_updated": data.get("last_updated", "Unknown")})
+                                module_items.append({
+                                    "name": name, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, 
+                                    "last_updated": data.get("last_updated", "Unknown"),
+                                    "due_date": data.get("due_date"), "is_priority": data.get("is_priority", False)
+                                })
                         
                         # Apply Sorting
-                        sort_key = "name" if "Name" in sort_order else "pct"
-                        sort_reverse = "Z-A" in sort_order or "High - Low" in sort_order
-                        module_items.sort(key=lambda x: x[sort_key], reverse=sort_reverse)
+                        if sort_order == "Priority":
+                            module_items.sort(key=lambda x: (x['is_priority'], x.get('due_date') is None, x.get('due_date')), reverse=True)
+                        elif sort_order == "Due Date (Soonest First)":
+                            module_items.sort(key=lambda x: (x.get('due_date') is None, x.get('due_date')))
+                        elif "Name" in sort_order:
+                            module_items.sort(key=lambda x: x['name'], reverse=("Z-A" in sort_order))
+                        elif "Completion" in sort_order:
+                            module_items.sort(key=lambda x: x['pct'], reverse=("High - Low" in sort_order))
                         
                         if not module_items:
                             st.warning("No modules found matching your search or filter.")
                         else:
-                            for i in range(0, len(module_items), 3):
+                            # --- Pagination Logic ---
+                            ITEMS_PER_PAGE = 12
+                            total_pages = (len(module_items) - 1) // ITEMS_PER_PAGE + 1
+                            st.session_state.current_page = min(st.session_state.current_page, total_pages - 1)
+
+                            start_idx = st.session_state.current_page * ITEMS_PER_PAGE
+                            end_idx = start_idx + ITEMS_PER_PAGE
+                            paginated_items = module_items[start_idx:end_idx]
+
+                            # --- Display Paginated Items ---
+                            for i in range(0, len(paginated_items), 3):
                                 cols = st.columns(3)
-                                for j, mod_dict in enumerate(module_items[i:i+3]):
+                                for j, mod_dict in enumerate(paginated_items[i:i+3]):
                                     with cols[j]:
                                         with st.container(border=True):
-                                            st.subheader(f"📦 {mod_dict['name']}")
+                                            card_header = "📦 "
+                                            if mod_dict.get("is_priority"):
+                                                card_header += "🚨 "
+                                            card_header += mod_dict['name']
+                                            st.subheader(card_header)
+
+                                            due_date_str = f"Due: {mod_dict['due_date']}" if mod_dict.get('due_date') else "No due date"
+                                            st.caption(f"{due_date_str} | ⏳ Last updated: {mod_dict['last_updated']}")
                                             st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
                                             
                                             # Use HTML flexbox to force columns and prevent Streamlit from collapsing them into rows
@@ -591,6 +708,22 @@ if check_password():
                                             if st.button("View Checklist", key=f"view_{mod_dict['name']}", use_container_width=True):
                                                 st.session_state.selected_module = mod_dict['name']
                                                 st.rerun()
+                            
+                            st.divider()
+
+                            # --- Pagination Controls ---
+                            if total_pages > 1:
+                                p_col1, p_col2, p_col3 = st.columns([3, 4, 3])
+                                with p_col1:
+                                    if st.button("← Previous", use_container_width=True, disabled=(st.session_state.current_page == 0)):
+                                        st.session_state.current_page -= 1
+                                        st.rerun()
+                                with p_col2:
+                                    st.write(f"Page **{st.session_state.current_page + 1}** of **{total_pages}**")
+                                with p_col3:
+                                    if st.button("Next →", use_container_width=True, disabled=(st.session_state.current_page >= total_pages - 1)):
+                                        st.session_state.current_page += 1
+                                        st.rerun()
                 with archived_tab:
                     st.write("These modules are 100% complete and have been archived to keep the active dashboard clean.")
                     if not archived_modules:
