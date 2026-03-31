@@ -684,7 +684,6 @@ if check_password():
 
                                             due_date_str = f"Due: {mod_dict['due_date']}" if mod_dict.get('due_date') else "No due date"
                                             st.caption(f"{due_date_str} | ⏳ Last updated: {mod_dict['last_updated']}")
-                                            st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
                                             
                                             # Use HTML flexbox to force columns and prevent Streamlit from collapsing them into rows
                                             metrics_html = f"""
