@@ -562,8 +562,9 @@ if check_password():
                             st.warning("No modules found matching your search or filter.")
                         else:
                             for i in range(0, len(module_items), 3):
+                                cols = st.columns(3)
                                 for j, mod_dict in enumerate(module_items[i:i+3]):
-                                    with st.columns(3)[j]:
+                                    with cols[j]:
                                         with st.container(border=True):
                                             st.subheader(f"📦 {mod_dict['name']}")
                                             st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
