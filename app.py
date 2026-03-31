@@ -6,6 +6,7 @@ import re
 import os
 import json
 import datetime
+import altair as alt
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page Configuration ---
@@ -591,7 +592,18 @@ if check_password():
                             prog_col1.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
                             prog_col2.metric("Overall Prekited", f"{global_pre_pct}%", f"{total_global_prekited} / {total_global_items} Items")
                             prog_col3.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
-                            st.bar_chart(pd.DataFrame(chart_data).set_index("Module"), y=["Collected %", "Prekited %", "Completed %"], stack=False)
+                            
+                            # Use Altair to force Y-axis from 0 to 100 with 5% steps
+                            if chart_data:
+                                chart_df = pd.DataFrame(chart_data)
+                                melted_df = chart_df.melt(id_vars=["Module"], value_vars=["Collected %", "Prekited %", "Completed %"], var_name="Stage", value_name="Percentage")
+                                bar_chart = alt.Chart(melted_df).mark_bar().encode(
+                                    x=alt.X('Module:N', title='Module', axis=alt.Axis(labelAngle=-45)),
+                                    y=alt.Y('Percentage:Q', scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(values=list(range(0, 101, 5)), title='Percentage (%)')),
+                                    color=alt.Color('Stage:N', legend=alt.Legend(title="Progress", orient="top")),
+                                    xOffset='Stage:N'
+                                ).properties(height=400)
+                                st.altair_chart(bar_chart, use_container_width=True)
 
                         # --- Global Issues Tracker ---
                         with st.expander("🚨 Global Issues & Bottlenecks", expanded=False):
