@@ -38,7 +38,8 @@ def load_all_modules_from_gsheets():
                     if "UIN" in bom_df.columns:
                         bom_df = bom_df.sort_values(by="UIN", ascending=True).reset_index(drop=True)
                     last_updated = row["Last_Updated"] if "Last_Updated" in df.columns else "Unknown"
-                    loaded_modules[name] = {"bom": bom_df, "last_updated": last_updated}
+                    is_archived = row["Archived"] if "Archived" in df.columns and pd.notna(row["Archived"]) else False
+                    loaded_modules[name] = {"bom": bom_df, "last_updated": last_updated, "archived": is_archived}
         return loaded_modules
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets. Check your secrets! Error: {e}")
@@ -52,12 +53,18 @@ def save_module_to_gsheets(module_name, bom_df):
         
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         bom_json = bom_df.to_json(orient="records")
-        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json, "Last_Updated": current_time}])
+
+        is_archived = False # Default for new or un-archived modules
+        if not df.empty and "Module_Name" in df.columns:
+            old_row = df[df["Module_Name"] == module_name]
+            if not old_row.empty and "Archived" in old_row.columns:
+                is_archived = old_row["Archived"].iloc[0] if pd.notna(old_row["Archived"].iloc[0]) else False
+
+        new_row = pd.DataFrame([{"Module_Name": module_name, "BOM_JSON": bom_json, "Last_Updated": current_time, "Archived": is_archived}])
         
         if not df.empty and "Module_Name" in df.columns:
             # Remove the old row for this module, if it exists
             df = df[df["Module_Name"] != module_name]
-            # Append the updated row
             df = pd.concat([df, new_row], ignore_index=True)
         else:
             df = new_row
@@ -67,6 +74,23 @@ def save_module_to_gsheets(module_name, bom_df):
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Failed to save to Google Sheets. Error: {e}")
+
+def set_archive_status_in_gsheets(module_name, is_archived):
+    """Sets the archive status for a specific module in Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0).dropna(how="all")
+        
+        if not df.empty and "Module_Name" in df.columns:
+            module_index = df.index[df["Module_Name"] == module_name].tolist()
+            if module_index:
+                if "Archived" not in df.columns:
+                    df["Archived"] = False
+                df.loc[module_index[0], "Archived"] = is_archived
+                conn.update(worksheet="Sheet1", data=df)
+                st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Failed to update archive status in Google Sheets. Error: {e}")
 
 def delete_module_from_gsheets(module_name):
     """Delete a module from Google Sheets."""
@@ -195,6 +219,8 @@ if check_password():
     for name, data in st.session_state.modules_db.items():
         if "last_updated" not in data:
             data["last_updated"] = "Unknown"
+        if "archived" not in data:
+            data["archived"] = False
         if "bom" in data:
             if "Collected" not in data["bom"].columns:
                 data["bom"].insert(0, "Collected", False)
@@ -249,7 +275,7 @@ if check_password():
                         
                         if not bom_df.empty:
                             # Update local memory
-                            st.session_state.modules_db[module_name] = {"bom": bom_df, "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                            st.session_state.modules_db[module_name] = {"bom": bom_df, "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "archived": False}
                             # Push to Google Sheets
                             save_module_to_gsheets(module_name, bom_df)
                             
@@ -323,9 +349,20 @@ if check_password():
             
             if progress_percentage == 100:
                 st.success("Module Complete! 🎉")
-                if st.button("Celebrate!", key=f"celebrate_{module_name}"):
-                    st.balloons()
-            
+                # --- Archive Controls for Admins ---
+                if st.session_state.get("user_role") == "Admin":
+                    is_archived = module_data.get("archived", False)
+                    if not is_archived:
+                        if st.button("🗄️ Archive Module", use_container_width=True):
+                            set_archive_status_in_gsheets(module_name, True)
+                            st.session_state.modules_db[module_name]["archived"] = True
+                            st.rerun()
+                    else: # Module is archived
+                        if st.button("⤴️ Unarchive Module", use_container_width=True):
+                            set_archive_status_in_gsheets(module_name, False)
+                            st.session_state.modules_db[module_name]["archived"] = False
+                            st.rerun()
+
             st.subheader("📝 Bill of Materials Checklist")
             
             user_role = st.session_state.get("user_role", "Admin")
@@ -424,141 +461,104 @@ if check_password():
             if not st.session_state.modules_db:
                 st.info("Your dashboard is empty. Please go to 'Upload New Module' to add some PDFs.")
             else:
-                st.write("Select a module to view its checklist.")
-                
-                # --- Overall Progress Chart ---
-                with st.expander("📈 View Overall Progress", expanded=True):
-                    chart_data = []
-                    total_global_items = 0
-                    total_global_collected = 0
-                    total_global_prekited = 0
-                    total_global_completed = 0
-                    
-                    for name, data in st.session_state.modules_db.items():
-                        df_mod = data["bom"]
-                        tot = len(df_mod)
-                        col = df_mod["Collected"].sum()
-                        pre = df_mod["Prekited"].sum()
-                        comp = df_mod["Completed"].sum()
-                        col_pct = int((col / tot) * 100) if tot > 0 else 0
-                        pre_pct = int((pre / tot) * 100) if tot > 0 else 0
-                        pct = int((comp / tot) * 100) if tot > 0 else 0
-                        chart_data.append({"Module": name, "Collected %": col_pct, "Prekited %": pre_pct, "Completed %": pct})
-                        total_global_items += tot
-                        total_global_collected += col
-                        total_global_prekited += pre
-                        total_global_completed += comp
-                        
-                    global_col_pct = int((total_global_collected / total_global_items) * 100) if total_global_items > 0 else 0
-                    global_pre_pct = int((total_global_prekited / total_global_items) * 100) if total_global_items > 0 else 0
-                    global_pct = int((total_global_completed / total_global_items) * 100) if total_global_items > 0 else 0
-                    
-                    prog_col1, prog_col2, prog_col3 = st.columns(3)
-                    with prog_col1:
-                        st.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
-                    with prog_col2:
-                        st.metric("Overall Prekited", f"{global_pre_pct}%", f"{total_global_prekited} / {total_global_items} Items")
-                    with prog_col3:
-                        st.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
-                        
-                    chart_df = pd.DataFrame(chart_data).set_index("Module")
-                    st.bar_chart(chart_df, y=["Collected %", "Prekited %", "Completed %"])
+                active_modules = {k: v for k, v in st.session_state.modules_db.items() if not v.get("archived", False)}
+                archived_modules = {k: v for k, v in st.session_state.modules_db.items() if v.get("archived", False)}
 
-                # --- Global Issues Tracker ---
-                with st.expander("🚨 Global Issues & Bottlenecks", expanded=False):
-                    all_issues = []
-                    for name, data in st.session_state.modules_db.items():
-                        df_mod = data["bom"]
-                        issues_df = df_mod[df_mod["Notes"].fillna("").astype(str).str.strip() != ""]
-                        if not issues_df.empty:
-                            issues_copy = issues_df.copy()
-                            issues_copy.insert(0, "Module", name)
-                            all_issues.append(issues_copy)
-                            
-                    if all_issues:
-                        combined_issues = pd.concat(all_issues, ignore_index=True)
-                        st.dataframe(combined_issues, hide_index=True, use_container_width=True)
+                active_tab, archived_tab = st.tabs([f"🚀 Active Modules ({len(active_modules)})", f"🗄️ Archived Modules ({len(archived_modules)})"])
+
+                with active_tab:
+                    if not active_modules:
+                        st.info("All modules are archived or the dashboard is empty. Check the 'Archived Modules' tab or upload a new module.")
                     else:
-                        st.success("No issues or notes logged across any modules! 🎉")
-
-                st.divider()
-                
-                # --- Smart Quick Filters ---
-                quick_filter = st.radio(
-                    "🎯 Smart Quick-Filters", 
-                    ["All Modules", "📦 Needs Collecting", "🔄 Ready for Prekit", "🛠️ Ready for Assembly"],
-                    horizontal=True
-                )
-
-                # --- Search and Sort Controls ---
-                ctrl_col1, ctrl_col2 = st.columns([3, 1])
-                with ctrl_col1:
-                    search_term = st.text_input("🔍 Search Modules", placeholder="Type to filter by module name...")
-                with ctrl_col2:
-                    sort_order = st.selectbox("↕️ Sort By", ["Name (A-Z)", "Name (Z-A)", "Completion (High - Low)", "Completion (Low - High)"])
-                
-                # Prepare filtered and calculated list
-                module_items = []
-                for name, data in st.session_state.modules_db.items():
-                    if search_term.lower() in name.lower():
-                        df_mod = data["bom"]
-                        tot = len(df_mod)
-                        col = df_mod["Collected"].sum()
-                        pre = df_mod["Prekited"].sum()
-                        comp = df_mod["Completed"].sum()
-                        col_pct = int((col / tot) * 100) if tot > 0 else 0
-                        pre_pct = int((pre / tot) * 100) if tot > 0 else 0
-                        pct = int((comp / tot) * 100) if tot > 0 else 0
-                        
-                        # Apply Quick Filters
-                        if quick_filter == "📦 Needs Collecting" and col_pct >= 100:
-                            continue
-                        if quick_filter == "🔄 Ready for Prekit" and (col_pct < 100 or pre_pct >= 100):
-                            continue
-                        if quick_filter == "🛠️ Ready for Assembly" and (pre_pct < 100 or pct >= 100):
-                            continue
+                        st.write("Select a module to view its checklist.")
+                        # --- Overall Progress Chart ---
+                        with st.expander("📈 View Overall Progress", expanded=True):
+                            chart_data = []
+                            total_global_items, total_global_collected, total_global_prekited, total_global_completed = 0, 0, 0, 0
                             
-                        last_updated = data.get("last_updated", "Unknown")
-                        
-                        module_items.append({"name": name, "data": data, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "tot": tot, "comp": comp, "last_updated": last_updated})
-                
-                # Apply Sorting
-                if sort_order == "Name (A-Z)":
-                    module_items = sorted(module_items, key=lambda x: x["name"].lower())
-                elif sort_order == "Name (Z-A)":
-                    module_items = sorted(module_items, key=lambda x: x["name"].lower(), reverse=True)
-                elif sort_order == "Completion (High - Low)":
-                    module_items = sorted(module_items, key=lambda x: x["pct"], reverse=True)
-                elif sort_order == "Completion (Low - High)":
-                    module_items = sorted(module_items, key=lambda x: x["pct"])
-                
-                if not module_items:
-                    st.warning("No modules found matching your search.")
-                else:
-                    # Chunk the items into rows of 3 columns
-                    for i in range(0, len(module_items), 3):
-                        cols = st.columns(3)
-                        for j in range(3):
-                            if i + j < len(module_items):
-                                mod_dict = module_items[i + j]
-                                module_name = mod_dict["name"]
+                            for name, data in active_modules.items():
+                                df_mod, tot = data["bom"], len(data["bom"])
+                                col, pre, comp = df_mod["Collected"].sum(), df_mod["Prekited"].sum(), df_mod["Completed"].sum()
+                                chart_data.append({"Module": name, "Collected %": int((col/tot)*100 if tot>0 else 0), "Prekited %": int((pre/tot)*100 if tot>0 else 0), "Completed %": int((comp/tot)*100 if tot>0 else 0)})
+                                total_global_items += tot
+                                total_global_collected += col
+                                total_global_prekited += pre
+                                total_global_completed += comp
                                 
-                                with cols[j]:
-                                    with st.container(border=True):
-                                        st.subheader(f"📦 {module_name}")
-                                        st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
-                                        # Show progress in columns
-                                        p_col1, p_col2, p_col3 = st.columns(3)
-                                        with p_col1:
-                                            st.caption("📦 Collected")
-                                            st.progress(mod_dict["col_pct"] / 100.0)
-                                        with p_col2:
-                                            st.caption("🔄 Prekited")
-                                            st.progress(mod_dict["pre_pct"] / 100.0)
-                                        with p_col3:
-                                            st.caption("🛠️ Assembled")
-                                            st.progress(mod_dict["pct"] / 100.0)
-                                        
-                                        if st.button("View Checklist", key=f"view_{module_name}", use_container_width=True):
-                                            st.session_state.selected_module = module_name
-                                            st.rerun()
+                            global_col_pct = int((total_global_collected / total_global_items) * 100) if total_global_items > 0 else 0
+                            global_pre_pct = int((total_global_prekited / total_global_items) * 100) if total_global_items > 0 else 0
+                            global_pct = int((total_global_completed / total_global_items) * 100) if total_global_items > 0 else 0
+                            
+                            prog_col1, prog_col2, prog_col3 = st.columns(3)
+                            prog_col1.metric("Overall Collected", f"{global_col_pct}%", f"{total_global_collected} / {total_global_items} Items")
+                            prog_col2.metric("Overall Prekited", f"{global_pre_pct}%", f"{total_global_prekited} / {total_global_items} Items")
+                            prog_col3.metric("Overall Assembled", f"{global_pct}%", f"{total_global_completed} / {total_global_items} Items")
+                            st.bar_chart(pd.DataFrame(chart_data).set_index("Module"), y=["Collected %", "Prekited %", "Completed %"])
+
+                        # --- Global Issues Tracker ---
+                        with st.expander("🚨 Global Issues & Bottlenecks", expanded=False):
+                            all_issues = [issues_df.assign(Module=name) for name, data in active_modules.items() if not (issues_df := data["bom"][data["bom"]["Notes"].fillna("").astype(str).str.strip() != ""]).empty]
+                            if all_issues:
+                                st.dataframe(pd.concat(all_issues, ignore_index=True), hide_index=True, use_container_width=True)
+                            else:
+                                st.success("No issues or notes logged across any active modules! 🎉")
+
+                        st.divider()
+                        
+                        # --- Smart Quick Filters ---
+                        quick_filter = st.radio("🎯 Smart Quick-Filters", ["All Modules", "📦 Needs Collecting", "🔄 Ready for Prekit", "🛠️ Ready for Assembly"], horizontal=True, key="active_quick_filter")
+
+                        # --- Search and Sort Controls ---
+                        ctrl_col1, ctrl_col2 = st.columns([3, 1])
+                        search_term = ctrl_col1.text_input("🔍 Search Modules", placeholder="Type to filter by module name...")
+                        sort_order = ctrl_col2.selectbox("↕️ Sort By", ["Name (A-Z)", "Name (Z-A)", "Completion (High - Low)", "Completion (Low - High)"])
+                        
+                        # Prepare filtered and calculated list
+                        module_items = []
+                        for name, data in active_modules.items():
+                            if search_term.lower() in name.lower():
+                                df_mod, tot = data["bom"], len(data["bom"])
+                                col_pct, pre_pct, pct = (int((s/tot)*100) if tot>0 else 0 for s in (df_mod["Collected"].sum(), df_mod["Prekited"].sum(), df_mod["Completed"].sum()))
+                                
+                                if (quick_filter == "📦 Needs Collecting" and col_pct >= 100) or \
+                                   (quick_filter == "🔄 Ready for Prekit" and (col_pct < 100 or pre_pct >= 100)) or \
+                                   (quick_filter == "🛠️ Ready for Assembly" and (pre_pct < 100 or pct >= 100)):
+                                    continue
+                                module_items.append({"name": name, "col_pct": col_pct, "pre_pct": pre_pct, "pct": pct, "last_updated": data.get("last_updated", "Unknown")})
+                        
+                        # Apply Sorting
+                        sort_key = "name" if "Name" in sort_order else "pct"
+                        sort_reverse = "Z-A" in sort_order or "High - Low" in sort_order
+                        module_items.sort(key=lambda x: x[sort_key], reverse=sort_reverse)
+                        
+                        if not module_items:
+                            st.warning("No modules found matching your search or filter.")
+                        else:
+                            for i in range(0, len(module_items), 3):
+                                for j, mod_dict in enumerate(module_items[i:i+3]):
+                                    with st.columns(3)[j]:
+                                        with st.container(border=True):
+                                            st.subheader(f"📦 {mod_dict['name']}")
+                                            st.caption(f"⏳ Last updated: {mod_dict['last_updated']}")
+                                            p_col1, p_col2, p_col3 = st.columns(3)
+                                            p_col1.caption("📦 Collected"); p_col1.progress(mod_dict["col_pct"] / 100.0)
+                                            p_col2.caption("🔄 Prekited"); p_col2.progress(mod_dict["pre_pct"] / 100.0)
+                                            p_col3.caption("🛠️ Assembled"); p_col3.progress(mod_dict["pct"] / 100.0)
+                                            if st.button("View Checklist", key=f"view_{mod_dict['name']}", use_container_width=True):
+                                                st.session_state.selected_module = mod_dict['name']
+                                                st.rerun()
+                with archived_tab:
+                    st.write("These modules are 100% complete and have been archived to keep the active dashboard clean.")
+                    if not archived_modules:
+                        st.info("No modules have been archived yet.")
+                    else:
+                        for name, data in sorted(archived_modules.items()):
+                            with st.container(border=True):
+                                a_col1, a_col2 = st.columns([4,1])
+                                with a_col1:
+                                    st.subheader(name)
+                                    st.caption(f"Archived on or after: {data.get('last_updated', 'N/A')}")
+                                with a_col2:
+                                    if st.button("View Details", key=f"view_archived_{name}", use_container_width=True):
+                                        st.session_state.selected_module = name
+                                        st.rerun()
